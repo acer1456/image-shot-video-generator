@@ -385,6 +385,26 @@ function AppInner() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [isFocusMode, isImmersiveMode, closeFocusMode, closeImmersiveMode])
 
+  // ---------- Global Space = play / pause ----------
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== ' ') return
+      const tag = (event.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if ((event.target as HTMLElement).isContentEditable) return
+      event.preventDefault()
+      if (store.isRendering) return
+      if (store.isPreviewing) {
+        previewCancelRef.current = true
+        store.setIsPreviewing(false)
+      } else {
+        previewPath()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [store, previewPath])
+
   // ---------- Render ----------
   const activePoint = store.points[store.activeIndex] || null
   const isDisabled = store.isRendering
