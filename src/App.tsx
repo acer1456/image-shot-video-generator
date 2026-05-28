@@ -47,6 +47,7 @@ function AppInner() {
   const [currentTime, setCurrentTime] = useState(0)
   const [isFocusMode, setIsFocusMode] = useState(false)
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
+  const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
@@ -368,9 +369,13 @@ function AppInner() {
   }, [store, triggerRedraw])
 
   const closeImmersiveMode = useCallback(() => {
-    setIsImmersiveMode(false)
-    setSnapGuide({ x: false, y: false })
-    triggerRedraw()
+    setIsImmersiveLeaving(true)
+    setTimeout(() => {
+      setIsImmersiveMode(false)
+      setIsImmersiveLeaving(false)
+      setSnapGuide({ x: false, y: false })
+      triggerRedraw()
+    }, 210)
   }, [triggerRedraw])
 
   useEffect(() => {
@@ -770,7 +775,7 @@ function AppInner() {
       </div>
 
       {isImmersiveMode && (
-        <div className="fixed inset-0 z-[95] bg-black/90 flex items-center justify-center">
+        <div className={`${isImmersiveLeaving ? 'immersive-leave' : 'immersive-enter'} fixed inset-0 z-[95] bg-black/90 flex items-center justify-center`}>
           {/* 關閉按鈕 */}
           <button
             className="absolute top-4 right-4 z-10 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors"
@@ -782,7 +787,7 @@ function AppInner() {
 
           {/* 9:16 畫布容器，盡量撐大但不超出視窗 */}
           <div
-            className="relative rounded-2xl overflow-hidden border border-white/10"
+            className={`${isImmersiveLeaving ? 'immersive-canvas-leave' : 'immersive-canvas-enter'} relative rounded-2xl overflow-hidden border border-white/10`}
             style={{
               aspectRatio: '9 / 16',
               maxHeight: 'calc(100vh - 32px)',

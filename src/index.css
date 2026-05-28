@@ -107,3 +107,45 @@
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground));
 }
+
+/* ── Immersive mode animations ── */
+@keyframes immersive-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes immersive-canvas-in {
+  from {
+    opacity: 0;
+    transform: scale(0.55) translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes immersive-backdrop-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes immersive-canvas-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.55) translateY(24px);
+  }
+}
+.immersive-enter {
+  animation: immersive-backdrop-in 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.immersive-canvas-enter {
+  animation: immersive-canvas-in 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.immersive-leave {
+  animation: immersive-backdrop-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+.immersive-canvas-leave {
+  animation: immersive-canvas-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
