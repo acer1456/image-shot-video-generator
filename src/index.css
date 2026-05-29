@@ -108,6 +108,19 @@
   background: hsl(var(--muted-foreground));
 }
 
+/* ── Number input spinner — larger click target ── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: auto;
+  opacity: 1;
+  cursor: pointer;
+  transform: scaleY(1.6) scaleX(1.25);
+  transform-origin: right center;
+}
+input[type="number"] {
+  padding-right: 6px; /* prevent text overlapping the enlarged spinner */
+}
+
 /* ── Immersive mode animations ── */
 @keyframes immersive-backdrop-in {
   from { opacity: 0; }
