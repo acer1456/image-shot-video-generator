@@ -33,6 +33,7 @@ export interface CameraPoint {
   moveDuration: number
   holdDuration: number
   caption: CaptionData
+  extraCaptions?: CaptionData[]
 }
 
 export interface BackgroundSettings {
@@ -79,6 +80,7 @@ export interface ProjectData {
 export interface DragState {
   type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight'
   index: number
+  captionIndex?: number  // 0 = primary caption, 1+ = extraCaptions[captionIndex-1]
 }
 
 export interface SnapGuide {

@@ -53,7 +53,8 @@ export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<C
     move: raw?.move === 'jump' ? 'jump' : 'slide',
     moveDuration: clamp(Number(raw?.moveDuration ?? 2), 0.1, 20),
     holdDuration: clamp(Number(raw?.holdDuration ?? 0.8), 0, 20),
-    caption: makeCaption(null, raw?.caption || {})
+    caption: makeCaption(null, raw?.caption || {}),
+    extraCaptions: (raw?.extraCaptions || []).map(c => makeCaption(null, c))
   }
 }
 
@@ -234,6 +235,39 @@ export function useAppStore() {
     return newPoints
   }, [])
 
+  const addExtraCaption = useCallback((pointIndex: number, currentPoints: CameraPoint[]) => {
+    const p = currentPoints[pointIndex]
+    if (!p) return currentPoints
+    const newCap = makeCaption(null, { y: 0.15, x: 0.5 })
+    const extra = [...(p.extraCaptions || []), newCap]
+    const next = currentPoints.map((pt, i) => i === pointIndex ? { ...pt, extraCaptions: extra } : pt)
+    setPoints(next)
+    return next
+  }, [])
+
+  const removeExtraCaption = useCallback((pointIndex: number, extraIndex: number, currentPoints: CameraPoint[]) => {
+    const p = currentPoints[pointIndex]
+    if (!p) return currentPoints
+    const extra = (p.extraCaptions || []).filter((_, i) => i !== extraIndex)
+    const next = currentPoints.map((pt, i) => i === pointIndex ? { ...pt, extraCaptions: extra } : pt)
+    setPoints(next)
+    return next
+  }, [])
+
+  const updateExtraCaptionField = useCallback(<K extends keyof CaptionData>(
+    pointIndex: number, extraIndex: number, field: K, value: CaptionData[K], currentPoints: CameraPoint[]
+  ) => {
+    const next = currentPoints.map((p, i) => {
+      if (i !== pointIndex) return p
+      const extra = [...(p.extraCaptions || [])]
+      if (!extra[extraIndex]) return p
+      extra[extraIndex] = { ...extra[extraIndex], [field]: value }
+      return { ...p, extraCaptions: extra }
+    })
+    setPoints(next)
+    return next
+  }, [])
+
   return {
     image, setImage,
     imageUrl, setImageUrl,
@@ -266,6 +300,9 @@ export function useAppStore() {
     insertPointAfter,
     duplicatePoint,
     reorderPoints,
+    addExtraCaption,
+    removeExtraCaption,
+    updateExtraCaptionField,
   }
 }
 

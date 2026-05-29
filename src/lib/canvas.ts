@@ -98,12 +98,15 @@ export function getViewBoxCanvas(
   return { x, y, w, h, handleX: x + w, handleY: y + h }
 }
 
+export function getAllCaptions(point: CameraPoint): CaptionData[] {
+  return [point.caption, ...(point.extraCaptions || [])]
+}
+
 export function getCaptionLayout(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
-  point: CameraPoint
+  cap: CaptionData
 ): CaptionLayout {
-  const cap = point.caption
   const fontFamily = cap.fontFamily || DEFAULT_FONT
   const subtitleFontFamily = cap.subtitleFontFamily || DEFAULT_FONT
   const mainSize = 56 * cap.scale
@@ -166,7 +169,8 @@ export function drawCamera(
   captionPoint: CameraPoint | null,
   includeGuides: boolean,
   showCaptionBox: boolean,
-  snapGuide: { x: boolean; y: boolean }
+  snapGuide: { x: boolean; y: boolean },
+  activeCaptionIndex = 0
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
@@ -186,21 +190,22 @@ export function drawCamera(
     ctx.drawImage(image, ix, iy, iw, ih, dx, dy, dw, dh)
   }
   if (captionPoint) {
-    drawCaption(canvas, ctx, captionPoint, includeGuides && showCaptionBox, snapGuide)
+    getAllCaptions(captionPoint).forEach((cap, i) => {
+      drawCaption(canvas, ctx, cap, includeGuides && i === activeCaptionIndex && showCaptionBox, snapGuide)
+    })
   }
 }
 
 export function drawCaption(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
-  point: CameraPoint,
+  cap: CaptionData,
   includeGuides: boolean,
   snapGuide: { x: boolean; y: boolean }
 ) {
-  const cap = point.caption
   const hasText = !!((cap.text || '').trim() || (cap.subtitle || '').trim())
   if (!hasText && !includeGuides) return
-  const layout = getCaptionLayout(canvas, ctx, point)
+  const layout = getCaptionLayout(canvas, ctx, cap)
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'

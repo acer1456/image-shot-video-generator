@@ -77,13 +77,20 @@ const FONT_OPTIONS = [
 interface CaptionEditorProps {
   point: CameraPoint | null
   disabled: boolean
+  activeCaptionIndex: number
+  onSetActiveCaptionIndex: (i: number) => void
+  onAddCaption: () => void
+  onDeleteCaption: (extraIndex: number) => void
   onUpdateCaption: <K extends keyof CaptionData>(field: K, value: CaptionData[K]) => void
   onUpdateHold: (value: number) => void
   onCenter: () => void
 }
 
-export default function CaptionEditor({ point, disabled, onUpdateCaption, onUpdateHold, onCenter }: CaptionEditorProps) {
-  const cap = point?.caption
+export default function CaptionEditor({ point, disabled, activeCaptionIndex, onSetActiveCaptionIndex, onAddCaption, onDeleteCaption, onUpdateCaption, onUpdateHold, onCenter }: CaptionEditorProps) {
+  const allCaps = point ? [point.caption, ...(point.extraCaptions || [])] : []
+  const cap = activeCaptionIndex === 0
+    ? point?.caption
+    : point?.extraCaptions?.[activeCaptionIndex - 1]
 
   const RangeNumber = ({
     label, value, min, max, step, field
@@ -131,6 +138,39 @@ export default function CaptionEditor({ point, disabled, onUpdateCaption, onUpda
           字幕置中
         </Button>
       </div>
+
+      {/* Caption selector tabs */}
+      {!disabled && (
+        <div className="flex items-center gap-1 flex-wrap">
+          {allCaps.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => onSetActiveCaptionIndex(i)}
+              className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                activeCaptionIndex === i
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted hover:bg-muted/80'
+              }`}
+            >
+              字幕 {i + 1}
+            </button>
+          ))}
+          <button
+            onClick={onAddCaption}
+            className="text-xs px-2.5 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors"
+          >
+            + 新增
+          </button>
+          {activeCaptionIndex > 0 && (
+            <button
+              onClick={() => onDeleteCaption(activeCaptionIndex - 1)}
+              className="text-xs px-2.5 py-1 rounded-md text-destructive hover:bg-destructive/10 transition-colors"
+            >
+              刪除
+            </button>
+          )}
+        </div>
+      )}
 
       {disabled ? (
         <div className="text-xs text-muted-foreground py-4 text-center">請先選擇一個鏡頭</div>

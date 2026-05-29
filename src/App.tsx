@@ -52,6 +52,10 @@ function AppInner() {
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false)
+  const [activeCaptionIndex, setActiveCaptionIndex] = useState(0)
+
+  // Reset active caption to primary whenever the selected camera point changes
+  useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
@@ -81,8 +85,9 @@ function AppInner() {
   }, [getCanvas, store, snapGuide])
 
   // Draw a frame using an explicit set of points (used for video export to support Chinese conversion).
-  // Mirrors drawTimelineTime's behaviour (including setActiveIndex) so the RAF / React scheduler
-  // cycle stays consistent and the render loop terminates at the correct wall-clock time.
+  // NOTE: intentionally does NOT call setActiveIndex — triggering React re-renders inside the
+  // RAF render loop causes non-deterministic timing delays that make shots appear longer in the
+  // exported video (performance.now() advances during the re-render, causing t to jump forward).
   const drawFrameWithPoints = useCallback((time: number, points: CameraPoint[]) => {
     const canvas = getCanvas()
     if (!canvas || !store.image) return
@@ -90,7 +95,6 @@ function AppInner() {
     if (!ctx) return
     const state = getTimelineStateAt(store.image, points, time)
     if (!state) return
-    store.setActiveIndex(state.pointIndex)
     doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, false, false, snapGuide)
   }, [getCanvas, store, snapGuide])
 
@@ -281,40 +285,79 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleCaptionMove = useCallback((index: number, x: number, y: number) => {
-    const next = store.updateCaptionField(index, 'x', x, store.points)
-    store.updateCaptionField(index, 'y', y, next)
-    store.rememberCaptionStyle(index, next)
+  const handleCaptionMove = useCallback((index: number, captionIndex: number, x: number, y: number) => {
+    if (captionIndex === 0) {
+      const next = store.updateCaptionField(index, 'x', x, store.points)
+      store.updateCaptionField(index, 'y', y, next)
+      store.rememberCaptionStyle(index, next)
+    } else {
+      const extraIndex = captionIndex - 1
+      const next = store.updateExtraCaptionField(index, extraIndex, 'x', x, store.points)
+      store.updateExtraCaptionField(index, extraIndex, 'y', y, next)
+    }
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleCaptionFontResize = useCallback((index: number, scale: number) => {
-    const next = store.updateCaptionField(index, 'scale', scale, store.points)
-    store.updateCaptionField(index, 'subtitleScale', scale, next)
-    store.rememberCaptionStyle(index, next)
+  const handleCaptionFontResize = useCallback((index: number, captionIndex: number, scale: number) => {
+    if (captionIndex === 0) {
+      const next = store.updateCaptionField(index, 'scale', scale, store.points)
+      store.updateCaptionField(index, 'subtitleScale', scale, next)
+      store.rememberCaptionStyle(index, next)
+    } else {
+      const extraIndex = captionIndex - 1
+      const next = store.updateExtraCaptionField(index, extraIndex, 'scale', scale, store.points)
+      store.updateExtraCaptionField(index, extraIndex, 'subtitleScale', scale, next)
+    }
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleCaptionBoxWidth = useCallback((index: number, boxScaleX: number) => {
-    store.updateCaptionField(index, 'boxScaleX', boxScaleX, store.points)
+  const handleCaptionBoxWidth = useCallback((index: number, captionIndex: number, boxScaleX: number) => {
+    if (captionIndex === 0) {
+      store.updateCaptionField(index, 'boxScaleX', boxScaleX, store.points)
+    } else {
+      store.updateExtraCaptionField(index, captionIndex - 1, 'boxScaleX', boxScaleX, store.points)
+    }
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleCaptionBoxHeight = useCallback((index: number, boxScaleY: number) => {
-    store.updateCaptionField(index, 'boxScaleY', boxScaleY, store.points)
+  const handleCaptionBoxHeight = useCallback((index: number, captionIndex: number, boxScaleY: number) => {
+    if (captionIndex === 0) {
+      store.updateCaptionField(index, 'boxScaleY', boxScaleY, store.points)
+    } else {
+      store.updateExtraCaptionField(index, captionIndex - 1, 'boxScaleY', boxScaleY, store.points)
+    }
     triggerRedraw()
   }, [store, triggerRedraw])
 
   const handleUpdateCaption = useCallback(<K extends keyof CaptionData>(field: K, value: CaptionData[K]) => {
     if (store.activeIndex < 0) return
-    const next = store.updateCaptionField(store.activeIndex, field, value, store.points)
-    store.rememberCaptionStyle(store.activeIndex, next)
+    if (activeCaptionIndex === 0) {
+      const next = store.updateCaptionField(store.activeIndex, field, value, store.points)
+      store.rememberCaptionStyle(store.activeIndex, next)
+    } else {
+      store.updateExtraCaptionField(store.activeIndex, activeCaptionIndex - 1, field, value, store.points)
+    }
     triggerRedraw()
-  }, [store, triggerRedraw])
+  }, [store, activeCaptionIndex, triggerRedraw])
 
   const handleUpdateHold = useCallback((value: number) => {
     if (store.activeIndex < 0) return
     store.updatePointField(store.activeIndex, 'holdDuration', value, store.points)
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
+  const handleAddCaption = useCallback(() => {
+    if (store.activeIndex < 0) return
+    const curExtrasLen = store.points[store.activeIndex]?.extraCaptions?.length || 0
+    store.addExtraCaption(store.activeIndex, store.points)
+    setActiveCaptionIndex(curExtrasLen + 1)
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
+  const handleDeleteCaption = useCallback((extraIndex: number) => {
+    if (store.activeIndex < 0) return
+    store.removeExtraCaption(store.activeIndex, extraIndex, store.points)
+    setActiveCaptionIndex(0)
     triggerRedraw()
   }, [store, triggerRedraw])
 
@@ -616,6 +659,8 @@ function AppInner() {
                   onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
                   onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
                   onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
+                  activeCaptionIndex={activeCaptionIndex}
+                  onCaptionSelect={setActiveCaptionIndex}
                   snapGuide={snapGuide}
                   setSnapGuide={setSnapGuide}
                   dragStateRef={dragStateRef}
@@ -737,12 +782,22 @@ function AppInner() {
               <CaptionEditor
                 point={activePoint}
                 disabled={!activePoint}
+                activeCaptionIndex={activeCaptionIndex}
+                onSetActiveCaptionIndex={setActiveCaptionIndex}
+                onAddCaption={handleAddCaption}
+                onDeleteCaption={handleDeleteCaption}
                 onUpdateCaption={handleUpdateCaption}
                 onUpdateHold={handleUpdateHold}
                 onCenter={() => {
                   if (store.activeIndex >= 0) {
-                    const next = store.updateCaptionField(store.activeIndex, 'x', 0.5, store.points)
-                    store.updateCaptionField(store.activeIndex, 'y', 0.82, next)
+                    if (activeCaptionIndex === 0) {
+                      const next = store.updateCaptionField(store.activeIndex, 'x', 0.5, store.points)
+                      store.updateCaptionField(store.activeIndex, 'y', 0.82, next)
+                    } else {
+                      const extraIndex = activeCaptionIndex - 1
+                      const next = store.updateExtraCaptionField(store.activeIndex, extraIndex, 'x', 0.5, store.points)
+                      store.updateExtraCaptionField(store.activeIndex, extraIndex, 'y', 0.82, next)
+                    }
                     triggerRedraw()
                   }
                 }}
@@ -861,6 +916,8 @@ function AppInner() {
               onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
               onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
               onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
+              activeCaptionIndex={activeCaptionIndex}
+              onCaptionSelect={setActiveCaptionIndex}
               snapGuide={snapGuide}
               setSnapGuide={setSnapGuide}
               dragStateRef={dragStateRef}
@@ -918,6 +975,8 @@ function AppInner() {
                   onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
                   onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
                   onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
+                  activeCaptionIndex={activeCaptionIndex}
+                  onCaptionSelect={setActiveCaptionIndex}
                   snapGuide={snapGuide}
                   setSnapGuide={setSnapGuide}
                   dragStateRef={dragStateRef}

@@ -5,7 +5,7 @@ import {
 } from '@/lib/utils'
 import {
   fitImageRect, getCameraForPoint, getViewBoxCanvas,
-  drawCamera, drawCaptionSafeArea, getCaptionLayout,
+  drawCamera, drawCaptionSafeArea, getCaptionLayout, getAllCaptions,
   imageToCanvasPoint, canvasToImageRatio, drawOutputBackground
 } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
@@ -27,10 +27,10 @@ interface CanvasEditorProps {
   onPointMove: (index: number, x: number, y: number) => void
   onPointResize: (index: number, zoom: number) => void
   onPointSelect: (index: number) => void
-  onCaptionMove: (index: number, x: number, y: number) => void
-  onCaptionFontResize: (index: number, scale: number) => void
-  onCaptionBoxWidth: (index: number, boxScaleX: number) => void
-  onCaptionBoxHeight: (index: number, boxScaleY: number) => void
+  onCaptionMove: (index: number, captionIndex: number, x: number, y: number) => void
+  onCaptionFontResize: (index: number, captionIndex: number, scale: number) => void
+  onCaptionBoxWidth: (index: number, captionIndex: number, boxScaleX: number) => void
+  onCaptionBoxHeight: (index: number, captionIndex: number, boxScaleY: number) => void
   onDragEnd: () => void
   snapGuide: { x: boolean; y: boolean }
   setSnapGuide: (guide: { x: boolean; y: boolean }) => void
@@ -40,6 +40,8 @@ interface CanvasEditorProps {
   onPointDelete?: (index: number) => void
   onEnterCaption?: () => void
   onBackToCamera?: () => void
+  activeCaptionIndex?: number
+  onCaptionSelect?: (captionIndex: number) => void
 }
 
 export default function CanvasEditor({
@@ -51,6 +53,7 @@ export default function CanvasEditor({
   onCaptionMove, onCaptionFontResize, onCaptionBoxWidth, onCaptionBoxHeight,
   onDragEnd, snapGuide, setSnapGuide, dragStateRef, currentTimeRef, forceRedraw,
   onPointDelete, onEnterCaption, onBackToCamera,
+  activeCaptionIndex = 0, onCaptionSelect,
 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { resolvedTheme } = useTheme()
@@ -95,7 +98,7 @@ export default function CanvasEditor({
 
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
       const camera = getCameraForPoint(image, points[activeIndex])
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, points[activeIndex], showGuides && showCaptionBox, showCaptionBox, snapGuide)
+      drawCamera(canvas, ctx, image, camera, backgroundSettings, points[activeIndex], showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex)
       if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
       return
     }
@@ -106,7 +109,7 @@ export default function CanvasEditor({
     ctx.drawImage(image, r.x, r.y, r.w, r.h)
 
     if (showGuides) drawEditorGuides(canvas, ctx)
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme])
+  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex])
 
   const drawEditorGuides = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
     if (!image || !points.length) return
@@ -250,20 +253,33 @@ export default function CanvasEditor({
     return distance(x, y, box.x + box.w, box.y) <= 36
   }
 
-  const getCaptionHit = (x: number, y: number): string | null => {
+  const getCaptionHit = (x: number, y: number): { type: string; captionIndex: number } | null => {
     const canvas = canvasRef.current
     if (!canvas || activeIndex < 0 || !points[activeIndex]) return null
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
-    const layout = getCaptionLayout(canvas, ctx, points[activeIndex])
-    const inBox = x >= layout.x && x <= layout.x + layout.width && y >= layout.y && y <= layout.y + layout.height
-    const onFont = x >= layout.x + layout.width - 46 && x <= layout.x + layout.width + 14 && y >= layout.y + layout.height - 46 && y <= layout.y + layout.height + 14
-    const onWidth = x >= layout.x + layout.width - 34 && x <= layout.x + layout.width + 34 && y >= layout.y + layout.height / 2 - 52 && y <= layout.y + layout.height / 2 + 52
-    const onHeight = x >= layout.x + layout.width / 2 - 52 && x <= layout.x + layout.width / 2 + 52 && y >= layout.y + layout.height - 34 && y <= layout.y + layout.height + 34
-    if (onFont) return 'captionFontResize'
-    if (onWidth) return 'captionBoxWidth'
-    if (onHeight) return 'captionBoxHeight'
-    if (inBox) return 'captionMove'
+    const allCaps = getAllCaptions(points[activeIndex])
+
+    // Check active caption's resize handles first (highest priority)
+    const activeCap = allCaps[activeCaptionIndex]
+    if (activeCap) {
+      const layout = getCaptionLayout(canvas, ctx, activeCap)
+      const onFont = x >= layout.x + layout.width - 46 && x <= layout.x + layout.width + 14 && y >= layout.y + layout.height - 46 && y <= layout.y + layout.height + 14
+      const onWidth = x >= layout.x + layout.width - 34 && x <= layout.x + layout.width + 34 && y >= layout.y + layout.height / 2 - 52 && y <= layout.y + layout.height / 2 + 52
+      const onHeight = x >= layout.x + layout.width / 2 - 52 && x <= layout.x + layout.width / 2 + 52 && y >= layout.y + layout.height - 34 && y <= layout.y + layout.height + 34
+      if (onFont) return { type: 'captionFontResize', captionIndex: activeCaptionIndex }
+      if (onWidth) return { type: 'captionBoxWidth', captionIndex: activeCaptionIndex }
+      if (onHeight) return { type: 'captionBoxHeight', captionIndex: activeCaptionIndex }
+    }
+
+    // Check all captions for captionMove (reverse order for z-order: last drawn on top)
+    for (let i = allCaps.length - 1; i >= 0; i--) {
+      const cap = allCaps[i]
+      if (!cap) continue
+      const layout = getCaptionLayout(canvas, ctx, cap)
+      const inBox = x >= layout.x && x <= layout.x + layout.width && y >= layout.y && y <= layout.y + layout.height
+      if (inBox) return { type: 'captionMove', captionIndex: i }
+    }
     return null
   }
 
@@ -286,7 +302,10 @@ export default function CanvasEditor({
     if (activeTab === 'caption') {
       const hit = getCaptionHit(pos.x, pos.y)
       if (hit) {
-        dragStateRef.current = { type: hit as DragState['type'], index: activeIndex }
+        if (hit.captionIndex !== activeCaptionIndex && onCaptionSelect) {
+          onCaptionSelect(hit.captionIndex)
+        }
+        dragStateRef.current = { type: hit.type as DragState['type'], index: activeIndex, captionIndex: hit.captionIndex }
         return
       }
     }
@@ -358,31 +377,43 @@ export default function CanvasEditor({
       setSnapGuide(newSnap)
       if (newSnap.x) nextX = 0.5
       if (newSnap.y) nextY = 0.5
-      onCaptionMove(drag.index, clamp(nextX, 0.03, 0.97), clamp(nextY, 0.03, 0.97))
+      onCaptionMove(drag.index, drag.captionIndex ?? 0, clamp(nextX, 0.03, 0.97), clamp(nextY, 0.03, 0.97))
     }
     if (drag.type === 'captionFontResize') {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      const layout = getCaptionLayout(canvas, ctx, p)
+      const captionIndex = drag.captionIndex ?? 0
+      const allCaps = getAllCaptions(p)
+      const cap = allCaps[captionIndex]
+      if (!cap) return
+      const layout = getCaptionLayout(canvas, ctx, cap)
       const dist = distance(pos.x, pos.y, layout.cx, layout.cy)
       const next = clamp(dist / (Math.min(canvas.width, canvas.height) * 0.22), 0.5, 3)
-      onCaptionFontResize(drag.index, next)
+      onCaptionFontResize(drag.index, captionIndex, next)
     }
     if (drag.type === 'captionBoxWidth') {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      const layout = getCaptionLayout(canvas, ctx, p)
-      const baseHalf = Math.max(120, layout.width / 2 / (p.caption.boxScaleX || 1))
+      const captionIndex = drag.captionIndex ?? 0
+      const allCaps = getAllCaptions(p)
+      const cap = allCaps[captionIndex]
+      if (!cap) return
+      const layout = getCaptionLayout(canvas, ctx, cap)
+      const baseHalf = Math.max(120, layout.width / 2 / (cap.boxScaleX || 1))
       const boxScaleX = clamp(Math.max(120, Math.abs(pos.x - layout.cx)) / baseHalf, 0.6, 2.4)
-      onCaptionBoxWidth(drag.index, boxScaleX)
+      onCaptionBoxWidth(drag.index, captionIndex, boxScaleX)
     }
     if (drag.type === 'captionBoxHeight') {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      const layout = getCaptionLayout(canvas, ctx, p)
-      const baseHalf = Math.max(40, layout.height / 2 / (p.caption.boxScaleY || 1))
+      const captionIndex = drag.captionIndex ?? 0
+      const allCaps = getAllCaptions(p)
+      const cap = allCaps[captionIndex]
+      if (!cap) return
+      const layout = getCaptionLayout(canvas, ctx, cap)
+      const baseHalf = Math.max(40, layout.height / 2 / (cap.boxScaleY || 1))
       const boxScaleY = clamp(Math.max(40, Math.abs(pos.y - layout.cy)) / baseHalf, 0.6, 2.4)
-      onCaptionBoxHeight(drag.index, boxScaleY)
+      onCaptionBoxHeight(drag.index, captionIndex, boxScaleY)
     }
   }
 
