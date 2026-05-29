@@ -4,10 +4,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import {
-  fetchOpenRouterModels, generateWithAi,
+  fetchOpenRouterModels, generateWithAi, SYSTEM_PROMPT,
   type AiGenerateResult, type OpenRouterModelInfo,
 } from '@/lib/openrouter'
-import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ChevronDown, RefreshCw } from 'lucide-react'
+import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ChevronDown, RefreshCw, FileText } from 'lucide-react'
 
 const LS_KEY_KEY        = 'openrouter_api_key'
 const LS_KEY_MODEL      = 'openrouter_model'
@@ -198,6 +198,7 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
   const [status, setStatus]       = useState<Status>('idle')
   const [errorMsg, setErrorMsg]   = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
+  const [showPrompt, setShowPrompt] = useState(false)
 
   useEffect(() => { if (apiKey)    localStorage.setItem(LS_KEY_KEY,        apiKey)    }, [apiKey])
   useEffect(() => { if (model)     localStorage.setItem(LS_KEY_MODEL,      model)     }, [model])
@@ -240,6 +241,10 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
         <div className="flex items-center gap-2 px-5 pt-5 pb-4 border-b border-border rounded-t-2xl bg-card">
           <Sparkles className="h-5 w-5 text-primary" />
           <h2 className="font-bold text-base flex-1">AI 自動產生內容</h2>
+          <button onClick={() => setShowPrompt(v => !v)} title="查看目前 Prompt"
+            className={`h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${showPrompt ? 'text-primary' : 'text-muted-foreground'}`}>
+            <FileText className="h-4 w-4" />
+          </button>
           <button onClick={handleClose}
             className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors">
             <X className="h-4 w-4" />
@@ -248,6 +253,20 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
 
         {/* Body */}
         <div className="px-5 py-4 flex flex-col gap-4 rounded-b-2xl bg-card">
+          {/* Prompt preview */}
+          {showPrompt && (
+            <div className="rounded-xl border border-border bg-muted/40 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/60">
+                <span className="text-xs font-medium text-muted-foreground">目前 System Prompt</span>
+                <button onClick={() => setShowPrompt(false)}
+                  className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+              <pre className="text-[11px] leading-relaxed text-foreground/80 p-3 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono">{SYSTEM_PROMPT}</pre>
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground leading-relaxed">
             上傳名畫後，AI 將自動分析畫作並產生鏡頭路徑與繁體中文介紹字幕。需要{' '}
             <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"
