@@ -6,6 +6,7 @@ import CaptionEditor from '@/components/CaptionEditor'
 import AssistPanel from '@/components/AssistPanel'
 import TimelinePanel from '@/components/TimelinePanel'
 import type { TimelinePanelHandle } from '@/components/TimelinePanel'
+import AiGeneratePanel from '@/components/AiGeneratePanel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -24,10 +25,12 @@ import {
 } from '@/lib/canvas'
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
-  Maximize, Maximize2, Upload, Camera, Type, Settings, MoreHorizontal, ChevronDown, X
+  Maximize, Maximize2, Upload, Camera, Type, Settings, MoreHorizontal, ChevronDown, X,
+  Sparkles
 } from 'lucide-react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { convertPointsCaptions, type ChineseConversion } from '@/lib/chinese'
+import type { AiGenerateResult } from '@/lib/openrouter'
 
 function AppInner() {
   const store = useAppStore()
@@ -48,6 +51,7 @@ function AppInner() {
   const [isFocusMode, setIsFocusMode] = useState(false)
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false)
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
@@ -330,6 +334,24 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
+  const handleAiGenerated = useCallback((result: AiGenerateResult) => {
+    const newPoints = result.points.map(p => {
+      const pt = normalizePoint({
+        x: p.x, y: p.y, zoom: p.zoom,
+        move: p.move, moveDuration: p.moveDuration, holdDuration: p.holdDuration,
+      })
+      pt.caption.text     = p.caption.text
+      pt.caption.subtitle  = p.caption.subtitle
+      if (p.caption.captionX != null) pt.caption.x = Math.max(0, Math.min(1, p.caption.captionX))
+      if (p.caption.captionY != null) pt.caption.y = Math.max(0, Math.min(1, p.caption.captionY))
+      return pt
+    })
+    store.setPoints(newPoints)
+    store.setActiveIndex(0)
+    store.setActiveTab('camera')
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
   const handleReorderPoints = useCallback((newPoints: CameraPoint[], newActiveIndex: number) => {
     store.reorderPoints(newPoints, newActiveIndex)
     triggerRedraw()
@@ -489,6 +511,18 @@ function AppInner() {
         </DropdownMenuPrimitive.Root>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsAiPanelOpen(true)}
+            title="AI 自動產生內容"
+            className="text-primary"
+          >
+            <Sparkles className="h-4 w-4" />
+          </Button>
+
+          <Separator orientation="vertical" className="h-8" />
+
           <Button
             variant="ghost"
             size="icon"
@@ -773,6 +807,14 @@ function AppInner() {
           />
         </div>
       </div>
+
+      {isAiPanelOpen && (
+        <AiGeneratePanel
+          image={store.image}
+          onGenerated={handleAiGenerated}
+          onClose={() => setIsAiPanelOpen(false)}
+        />
+      )}
 
       {isImmersiveMode && (
         <div className={`${isImmersiveLeaving ? 'immersive-leave' : 'immersive-enter'} fixed inset-0 z-[95] bg-black/90 flex items-center justify-center`}>

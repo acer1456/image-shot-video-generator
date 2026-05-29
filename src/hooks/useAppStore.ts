@@ -18,11 +18,11 @@ function makeCaption(
 ): CaptionData {
   const base: CaptionData = {
     text: '', subtitle: '', x: 0.5, y: 0.82, scale: 1, subtitleScale: 1,
-    fontFamily: DEFAULT_FONT, subtitleFontFamily: DEFAULT_FONT,
+    fontFamily: 'Georgia', subtitleFontFamily: 'Georgia',
     boxScaleX: 1, boxScaleY: 1, shadowColor: '#000000', shadowAlpha: 0.48,
-    shadowBoxVisible: true,
-    textShadowColor: '#000000', textShadowAlpha: 0.7, textShadowAngle: 120, textShadowDistance: 0,
-    subTextShadowColor: '#000000', subTextShadowAlpha: 0.7, subTextShadowAngle: 120, subTextShadowDistance: 0,
+    shadowBoxVisible: false,
+    textShadowColor: '#000000', textShadowAlpha: 0.7, textShadowAngle: 50, textShadowDistance: 5,
+    subTextShadowColor: '#000000', subTextShadowAlpha: 0.7, subTextShadowAngle: 50, subTextShadowDistance: 5,
   }
   return { ...base, ...(lastCaptionStyle || {}), text: '', subtitle: '', ...overrides }
 }
