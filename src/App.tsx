@@ -67,13 +67,30 @@ function AppInner() {
   const loadImageFromUrl = useCallback(async (url: string, title: string) => {
     setLoadingPainting(true)
     try {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const blob = await res.blob()
-      const ext = url.split('.').pop()?.split('?')[0] ?? 'jpg'
+      // Force HTTPS to avoid mixed-content blocks in PWA
+      const safeUrl = url.replace(/^http:\/\//, 'https://')
+
+      let blob: Blob | undefined
+
+      // 1st attempt: direct fetch (works for CORS-enabled servers e.g. ARTIC IIIF)
+      try {
+        const res = await fetch(safeUrl)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        blob = await res.blob()
+      } catch {
+        // 2nd attempt: images.weserv.nl — dedicated image proxy with CORS headers;
+        // also resizes to 1600px to reduce file size for large print-quality images
+        const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(safeUrl)}&w=1600&output=jpg`
+        const res2 = await fetch(proxyUrl)
+        if (!res2.ok) throw new Error(`proxy HTTP ${res2.status}`)
+        blob = await res2.blob()
+      }
+
+      const ext = safeUrl.split('.').pop()?.split('?')[0]?.toLowerCase() ?? 'jpg'
       const file = new File([blob], `${title}.${ext}`, { type: blob.type || 'image/jpeg' })
       store.loadImageFile(file, !store.image, store.imageUrl)
-    } catch {
+    } catch (err) {
+      console.error('[loadImageFromUrl]', err)
       alert('載入名畫失敗，請稍後再試')
     } finally {
       setLoadingPainting(false)
