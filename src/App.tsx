@@ -53,6 +53,7 @@ function AppInner() {
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false)
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0)
+  const [renderProgress, setRenderProgress] = useState(0)
 
   // Reset active caption to primary whenever the selected camera point changes
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
@@ -82,20 +83,6 @@ function AppInner() {
     if (!state) return
     store.setActiveIndex(state.pointIndex)
     doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide)
-  }, [getCanvas, store, snapGuide])
-
-  // Draw a frame using an explicit set of points (used for video export to support Chinese conversion).
-  // NOTE: intentionally does NOT call setActiveIndex — triggering React re-renders inside the
-  // RAF render loop causes non-deterministic timing delays that make shots appear longer in the
-  // exported video (performance.now() advances during the re-render, causing t to jump forward).
-  const drawFrameWithPoints = useCallback((time: number, points: CameraPoint[]) => {
-    const canvas = getCanvas()
-    if (!canvas || !store.image) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    const state = getTimelineStateAt(store.image, points, time)
-    if (!state) return
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, false, false, snapGuide)
   }, [getCanvas, store, snapGuide])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
@@ -165,36 +152,75 @@ function AppInner() {
     store.setIsRendering(true)
     store.setIsPreviewing(false)
     try {
-      const canvas = getCanvas()
-      if (!canvas) throw new Error('Canvas not found')
-      canvas.width = OUTPUT_W
-      canvas.height = OUTPUT_H
       const renderPoints = captionConversion === 'original'
         ? store.points
         : convertPointsCaptions(store.points, captionConversion)
       const { totalDuration: td } = buildTimeline(renderPoints)
-      // Prime the canvas with frame 0 BEFORE starting the recorder
-      // to prevent a transparent/white opening frame in the exported video
-      drawFrameWithPoints(0, renderPoints)
-      await nextFrame()
-      const stream = canvas.captureStream(30)
+      const RENDER_FPS = 30
+      const FRAME_MS = Math.ceil(1000 / RENDER_FPS) // ~34 ms per frame
+      const totalFrames = Math.ceil(td * RENDER_FPS) + 1
+
+      // Dedicated offscreen canvas — completely isolated from the editor canvas.
+      // Prevents React re-renders / drawBase() effects from interfering with the
+      // capture stream, which caused progressive data loss on repeated exports.
+      // Also lets us use fixed time-step rendering without touching the editor view.
+      const off = document.createElement('canvas')
+      off.width = OUTPUT_W
+      off.height = OUTPUT_H
+      const offCtx = off.getContext('2d')!
+
+      // Also grab the editor canvas for live preview during export.
+      // Since isRendering=true, CanvasEditor's drawBase() has an early-return guard
+      // and won't interfere. Drawing to both canvases is synchronous and completes
+      // well within the 34ms frame budget, so the recording is not affected.
+      const editorCanvas = getCanvas()
+      const editorCtx = editorCanvas?.getContext('2d') ?? null
+
+      const drawFrame = (t: number) => {
+        const state = getTimelineStateAt(store.image!, renderPoints, t)
+        if (!state) return
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false })
+        if (editorCanvas && editorCtx) {
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false })
+        }
+      }
+
+      // captureStream(0) = manual frame mode: frames are only captured when
+      // requestFrame() is explicitly called. This is necessary for offscreen
+      // canvases because the browser's compositor never visits them, so
+      // captureStream(N) with a non-zero rate never actually samples any pixels,
+      // causing the stream to produce no data and recorder.onstop to hang forever.
+      const stream = off.captureStream(0)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const captureTrack = stream.getVideoTracks()[0] as any
       const chunks: BlobPart[] = []
       const mimeType = getBestVideoMimeType()
       const recorder = new MediaRecorder(stream, { mimeType })
       recorder.ondataavailable = event => { if (event.data.size > 0) chunks.push(event.data) }
-      const done = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
+      const done = new Promise<void>((resolve, reject) => {
+        recorder.onstop = () => resolve()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recorder.onerror = (e: Event) => reject(new Error('MediaRecorder: ' + ((e as any).error?.message ?? 'unknown error')))
+      })
       recorder.start()
-      const start = performance.now()
-      while (true) {
-        const elapsed = (performance.now() - start) / 1000
-        const t = Math.min(elapsed, td)
-        drawFrameWithPoints(t, renderPoints)
-        if (t >= td) break
-        await nextFrame()
+
+      setRenderProgress(0)
+      // Fixed-step render: t = frame / FPS — each frame is explicitly pushed to the
+      // stream via requestFrame(), ensuring reliable capture for offscreen canvases.
+      for (let frame = 0; frame < totalFrames; frame++) {
+        drawFrame(Math.min(frame / RENDER_FPS, td))
+        captureTrack.requestFrame?.()
+        setRenderProgress(Math.round((frame + 1) / totalFrames * 100))
+        if (frame < totalFrames - 1) await wait(FRAME_MS)
       }
-      await wait(150)
+
+      // Give the stream enough time to capture the final frame before stopping.
+      await wait(300)
       recorder.stop()
       await done
+      // Explicitly stop the track so the canvas is no longer held by this stream.
+      stream.getTracks().forEach(track => track.stop())
+
       const blob = new Blob(chunks, { type: mimeType })
       if (store.lastVideoUrl) URL.revokeObjectURL(store.lastVideoUrl)
       const url = URL.createObjectURL(blob)
@@ -212,9 +238,7 @@ function AppInner() {
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, drawFrameWithPoints, triggerRedraw])
-
-  // ---------- Save / Load project ----------
+  }, [store, getCanvas, triggerRedraw])
   const saveProject = useCallback(async () => {
     try {
       const name = normalizeProjectName(store.projectName)
@@ -502,7 +526,8 @@ function AppInner() {
           className="hidden"
           onChange={e => {
             const file = e.target.files?.[0]
-            if (file) store.loadImageFile(file, true, store.imageUrl)
+            // 已有圖片時只換底圖，保留所有鏡頭/字幕設定；第一次上傳才重置專案
+            if (file) store.loadImageFile(file, !store.image, store.imageUrl)
             e.target.value = ''
           }}
         />
@@ -552,6 +577,18 @@ function AppInner() {
             </DropdownMenuPrimitive.Content>
           </DropdownMenuPrimitive.Portal>
         </DropdownMenuPrimitive.Root>
+
+        {store.isRendering && (
+          <div className="flex items-center gap-1.5 ml-2">
+            <div className="w-28 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-100"
+                style={{ width: `${renderProgress}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{renderProgress}%</span>
+          </div>
+        )}
 
         <div className="ml-auto flex items-center gap-1.5">
           <Button
