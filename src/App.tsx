@@ -7,6 +7,7 @@ import AssistPanel from '@/components/AssistPanel'
 import TimelinePanel from '@/components/TimelinePanel'
 import type { TimelinePanelHandle } from '@/components/TimelinePanel'
 import AiGeneratePanel from '@/components/AiGeneratePanel'
+import { MasterworkPickerModal } from '@/components/MasterworkPickerModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -26,7 +27,7 @@ import {
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
   Maximize, Maximize2, Upload, Camera, Type, Settings, MoreHorizontal, ChevronDown, X,
-  Sparkles
+  Sparkles, Palette, Loader2
 } from 'lucide-react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { convertPointsCaptions, type ChineseConversion } from '@/lib/chinese'
@@ -52,6 +53,8 @@ function AppInner() {
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false)
+  const [isMasterworkPickerOpen, setIsMasterworkPickerOpen] = useState(false)
+  const [loadingPainting, setLoadingPainting] = useState(false)
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0)
   const [renderProgress, setRenderProgress] = useState(0)
 
@@ -59,6 +62,23 @@ function AppInner() {
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
+
+  /** 從 URL 載入畫作到 canvas（名畫庫使用） */
+  const loadImageFromUrl = useCallback(async (url: string, title: string) => {
+    setLoadingPainting(true)
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const ext = url.split('.').pop()?.split('?')[0] ?? 'jpg'
+      const file = new File([blob], `${title}.${ext}`, { type: blob.type || 'image/jpeg' })
+      store.loadImageFile(file, !store.image, store.imageUrl)
+    } catch {
+      alert('載入名畫失敗，請稍後再試')
+    } finally {
+      setLoadingPainting(false)
+    }
+  }, [store])
 
   // Sync total duration whenever points change
   useEffect(() => {
@@ -515,9 +535,23 @@ function AppInner() {
         <Separator orientation="vertical" className="h-8" />
 
         {/* File upload */}
-        <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isDisabled}>
+        <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isDisabled || loadingPainting}>
           <Upload className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">上傳圖片</span>
+        </Button>
+
+        {/* Masterwork picker */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIsMasterworkPickerOpen(true)}
+          disabled={isDisabled || loadingPainting}
+          title="從名畫庫選擇圖片"
+        >
+          {loadingPainting
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Palette className="h-3.5 w-3.5" />}
+          <span className="hidden sm:inline">{loadingPainting ? '載入中...' : '名畫庫'}</span>
         </Button>
         <input
           ref={fileInputRef}
@@ -907,6 +941,12 @@ function AppInner() {
           onClose={() => setIsAiPanelOpen(false)}
         />
       )}
+
+      <MasterworkPickerModal
+        open={isMasterworkPickerOpen}
+        onClose={() => setIsMasterworkPickerOpen(false)}
+        onSelectImage={(url, title) => loadImageFromUrl(url, title)}
+      />
 
       {isImmersiveMode && (
         <div className={`${isImmersiveLeaving ? 'immersive-leave' : 'immersive-enter'} fixed inset-0 z-[95] bg-black/90 flex items-center justify-center`}>
