@@ -3,8 +3,14 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
+const basePath = process.env.VITE_BASE_PATH ?? '/'
+// When building the stable (main) version, prevent its Service Worker from
+// intercepting navigation requests destined for the /preview/ sub-deployment,
+// so the preview SW can register and serve its own index.html correctly.
+const isPreviewBuild = basePath.includes('/preview/')
+
 export default defineConfig({
-  base: process.env.VITE_BASE_PATH ?? '/',
+  base: basePath,
   plugins: [
     react(),
     VitePWA({
@@ -12,6 +18,7 @@ export default defineConfig({
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
       workbox: {
         maximumFileSizeToCacheInBytes: 30 * 1024 * 1024, // 30 MiB — covers WASM + kokoro bundle
+        navigateFallbackDenylist: isPreviewBuild ? [] : [/\/preview\//],
       },
       manifest: {
         name: '畫作鏡頭影片產生器',
