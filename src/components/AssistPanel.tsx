@@ -4,27 +4,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
-import { Switch } from '@/components/ui/switch'
-import { Separator } from '@/components/ui/separator'
 import { clamp } from '@/lib/utils'
 import { Paintbrush } from 'lucide-react'
 
 interface AssistPanelProps {
   backgroundSettings: BackgroundSettings
   onBackgroundChange: (settings: BackgroundSettings) => void
-  showAllPoints: boolean
-  onlyActiveBox: boolean
-  showCaptionBox: boolean
-  showGuidesInPreview: boolean
-  onToggle: (key: 'showAllPoints' | 'onlyActiveBox' | 'showCaptionBox' | 'showGuidesInPreview', val: boolean) => void
-  safeAreaVisibility: { ig: boolean; shorts: boolean; tiktok: boolean }
-  onSafeAreaChange: (key: 'ig' | 'shorts' | 'tiktok', val: boolean) => void
 }
 
 export default function AssistPanel({
   backgroundSettings, onBackgroundChange,
-  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, onToggle,
-  safeAreaVisibility, onSafeAreaChange
 }: AssistPanelProps) {
   return (
     <div className="flex flex-col gap-3 overflow-y-auto pr-1" style={{ maxHeight: 'calc(100vh - 320px)' }}>
@@ -82,43 +71,6 @@ export default function AssistPanel({
       </Button>
 
       <p className="text-xs text-muted-foreground">當 9:16 鏡頭框超出原圖時，露出的留白會使用背景設定，並會一起輸出到影片。</p>
-
-      <Separator />
-
-      <p className="text-sm font-semibold">平台預覽</p>
-
-      {(['ig', 'shorts', 'tiktok'] as const).map(key => (
-        <div key={key} className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">
-            {{ ig: 'IG Reels UI', shorts: 'YouTube Shorts UI', tiktok: 'TikTok UI' }[key]}
-          </span>
-          <Switch
-            checked={safeAreaVisibility[key]}
-            onCheckedChange={val => onSafeAreaChange(key, val)}
-          />
-        </div>
-      ))}
-
-      <Separator />
-
-      <p className="text-sm font-semibold">畫布輔助顯示</p>
-
-      {([
-        { key: 'showAllPoints', label: '顯示所有鏡頭點位', value: showAllPoints },
-        { key: 'onlyActiveBox', label: '只顯示目前鏡頭視野框', value: onlyActiveBox },
-        { key: 'showCaptionBox', label: '顯示字幕編輯框', value: showCaptionBox },
-        { key: 'showGuidesInPreview', label: '預覽時顯示編輯輔助', value: showGuidesInPreview },
-      ] as const).map(item => (
-        <div key={item.key} className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">{item.label}</span>
-          <Switch
-            checked={item.value}
-            onCheckedChange={val => onToggle(item.key, val)}
-          />
-        </div>
-      ))}
-
-      <p className="text-xs text-muted-foreground">產生影片時不會輸出藍色點、白色框或控制點，只會輸出畫作與字幕。</p>
     </div>
   )
 }

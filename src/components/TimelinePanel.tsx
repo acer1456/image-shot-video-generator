@@ -1,12 +1,12 @@
-import { useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
+import { useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandle, useState } from 'react'
 import { Timeline } from '@xzdarcy/react-timeline-editor'
 import type { TimelineState } from '@xzdarcy/react-timeline-editor'
 import type { TimelineRow, TimelineEffect, TimelineAction } from '@xzdarcy/timeline-engine'
-import type { CameraPoint } from '@/types'
+import type { CameraPoint, NarrationSegment } from '@/types'
 import { formatTime } from '@/lib/utils'
 import { buildTimeline } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
-import { Play, Pause } from 'lucide-react'
+import { Play, Pause, ChevronsUpDown, ChevronsDownUp } from 'lucide-react'
 
 // Extended action type that carries our app-specific metadata
 type RichAction = TimelineAction & {
@@ -20,72 +20,113 @@ export interface TimelinePanelHandle {
 }
 
 const EFFECTS: Record<string, TimelineEffect> = {
-  move:    { id: 'move',    name: '移動' },
-  hold:    { id: 'hold',    name: '停留' },
-  caption: { id: 'caption', name: '字幕' },
+  move:      { id: 'move',      name: '移動' },
+  hold:      { id: 'hold',      name: '停留' },
+  caption:   { id: 'caption',   name: '旁白' },
+  music:     { id: 'music',     name: '音樂' },
+  narration: { id: 'narration', name: '旁白' },
 }
 
-const ROW_CAMERA  = 'row-camera'
-const ROW_CAPTION = 'row-caption'
+const ROW_CAMERA    = 'row-camera'
+const ROW_NARRATION = 'row-narration'
+const ROW_MUSIC     = 'row-music'
+
+const ROW_LABELS: Record<string, string> = {
+  [ROW_CAMERA]:    '鏡頭',
+  [ROW_NARRATION]: '旁白',
+  [ROW_MUSIC]:     '音樂',
+}
+
+const NUM_ROWS = 3
 
 /** Pixels rendered for 1-second scale mark */
 const SCALE_WIDTH  = 80
 /** Left margin reserved for row labels */
 const START_LEFT   = 60
-/** Height of each row in px */
-const ROW_HEIGHT   = 30
-/** Height of the top ruler */
-const SCALE_HEIGHT = 32
+/** Height of each row in px (normal mode) */
+const ROW_HEIGHT          = 36
+/** Height of each row in px (expanded mode) */
+const ROW_HEIGHT_EXPANDED = 72
+/** Height of the top ruler — must match .timeline-editor-time-area height in index.css */
+const SCALE_HEIGHT = 28
+
+function getActionColors(effectId: string, rowId: string): { bg: string; fg: string } {
+  if (rowId === ROW_MUSIC)     return { bg: 'rgba(168,85,247,.82)',  fg: '#ffffff' }
+  if (rowId === ROW_NARRATION) return { bg: 'rgba(251,146,60,.88)',  fg: '#ffffff' }
+  switch (effectId) {
+    case 'move':    return { bg: 'rgba(37,99,235,.85)',  fg: '#ffffff' }
+    case 'hold':    return { bg: 'rgba(16,185,129,.82)', fg: '#ffffff' }
+    case 'caption': return { bg: 'rgba(234,179,8,.90)',  fg: '#1a1a1a' }
+    default:        return { bg: 'rgba(100,100,100,.6)', fg: '#ffffff' }
+  }
+}
 
 interface TimelinePanelProps {
-  points:              CameraPoint[]
-  currentTime:         number
-  totalDuration:       number
-  isPreviewing:        boolean
-  isDisabled:          boolean
-  onTimeChange:        (time: number) => void
-  onPointSelect:       (index: number) => void
-  onHoldDurationChange:(pointIndex: number, duration: number) => void
-  onMoveDurationChange:(pointIndex: number, duration: number) => void
-  onPlay:              () => void
-  onPause:             () => void
+  points:                      CameraPoint[]
+  currentTime:                 number
+  totalDuration:               number
+  isPreviewing:                boolean
+  isDisabled:                  boolean
+  expanded?:                   boolean
+  onToggleExpanded?:           () => void
+  onTimeChange:                (time: number) => void
+  onPointSelect:               (index: number) => void
+  onHoldDurationChange:        (pointIndex: number, duration: number) => void
+  onMoveDurationChange:        (pointIndex: number, duration: number) => void
+  onPlay:                      () => void
+  onPause:                     () => void
+  narrationSegments?:          NarrationSegment[]
+  onNarrationSegmentsChange?:  (segs: NarrationSegment[]) => void
 }
 
 export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function TimelinePanel({
   points, currentTime, totalDuration, isPreviewing, isDisabled,
-  onTimeChange, onPointSelect, onHoldDurationChange, onMoveDurationChange, onPlay, onPause
+  expanded = false, onToggleExpanded,
+  onTimeChange, onPointSelect, onHoldDurationChange, onMoveDurationChange, onPlay, onPause,
+  narrationSegments, onNarrationSegmentsChange,
 }, ref) {
   const { resolvedTheme } = useTheme()
   const isDark      = resolvedTheme === 'dark'
   const timelineRef = useRef<TimelineState>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
+  const rootRef     = useRef<HTMLDivElement>(null)
+
+  // ── Row order + local music state ────────────────────────────────────────
+  const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_NARRATION, ROW_MUSIC])
+  const [localMusic, setLocalMusic] = useState<TimelineAction[]>([])
+  // Incrementing forces editorData useMemo to recompute → camera/narration blocks snap back
+  const [snapKey, setSnapKey]       = useState(0)
 
   const revealTime = useCallback((time: number, smooth = true) => {
     const root = rootRef.current
     if (!root) return
 
-    const grid = root.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid') as HTMLElement | null
+    const grid     = root.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid') as HTMLElement | null
     const scroller = grid || (root.querySelector('.timeline-editor-edit-area') as HTMLElement | null)
     if (!scroller) return
 
-    const targetX = START_LEFT + Math.max(0, time) * SCALE_WIDTH
-    const viewLeft = scroller.scrollLeft
+    const targetX  = START_LEFT + Math.max(0, time) * SCALE_WIDTH
+    const viewLeft  = scroller.scrollLeft
     const viewRight = viewLeft + scroller.clientWidth
-    const margin = 64
+    const margin    = 64
 
     if (!smooth) {
-      // Playback follow mode: keep cursor near a stable focus point and move continuously.
-      const focusX = scroller.clientWidth * 0.38
-      const desiredLeft = Math.max(0, targetX - focusX)
-      const delta = desiredLeft - viewLeft
-      if (Math.abs(delta) < 0.5) return
-      scroller.scrollLeft = viewLeft + delta * 0.22
+      // Playback follow mode: cursor runs freely across the visible area.
+      // Only scroll when cursor is within rightPad pixels of the right edge
+      // (or has gone off the left edge after a backward seek).
+      const rightPad = 56
+      const leftPad  = 20
+      if (targetX > viewRight - rightPad) {
+        // Cursor near right edge — advance scroll so cursor stays at rightPad from right.
+        scroller.scrollLeft = targetX - scroller.clientWidth + rightPad
+      } else if (targetX < viewLeft + leftPad) {
+        // Backward seek — snap scroll so cursor is near left with a small buffer.
+        scroller.scrollLeft = Math.max(0, targetX - leftPad)
+      }
       return
     }
 
     if (targetX < viewLeft + margin || targetX > viewRight - margin) {
-      const nextLeft = Math.max(0, targetX - scroller.clientWidth * 0.35)
-      scroller.scrollTo({ left: nextLeft, behavior: 'smooth' })
+      scroller.scrollTo({ left: Math.max(0, targetX - scroller.clientWidth * 0.35), behavior: 'smooth' })
     }
   }, [])
 
@@ -101,107 +142,197 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     timelineRef.current?.setTime(currentTime)
   }, [currentTime])
 
-  // ── Build timeline items ────────────────────────────────────────────────
+  // ── Build timeline items ──────────────────────────────────────────────────
   const { items } = useMemo(() => buildTimeline(points), [points])
 
-  const editorData: TimelineRow[] = useMemo(() => {
-    const cameraActions:  TimelineAction[] = []
-    const captionActions: TimelineAction[] = []
+  // Camera row: hold/move blocks are resizable (right edge) but NOT draggable —
+  // sequential packing means any move would create a gap.
+  const cameraActions = useMemo<TimelineAction[]>(() =>
+    items.filter(i => i.type !== 'caption').map(item => ({
+      id:       `${item.type}-${item.pointIndex}-${Math.round(item.start * 1000)}`,
+      start:    item.start,
+      end:      item.end,
+      effectId: item.type,
+      movable:  false,
+      flexible: true,
+      data:     { label: item.label, pointIndex: item.pointIndex, type: item.type },
+    } as RichAction as TimelineAction)),
+    [items],
+  )
 
-    items.forEach(item => {
-      const action: RichAction = {
-        id:       `${item.type}-${item.pointIndex}-${Math.round(item.start * 1000)}`,
-        start:    item.start,
-        end:      item.end,
-        effectId: item.type,
-        movable:  false,
-        // move and hold blocks can be resized (right edge only)
-        flexible: item.type === 'hold' || item.type === 'move',
-        data: { label: item.label, pointIndex: item.pointIndex, type: item.type },
-      }
-      if (item.type === 'caption') captionActions.push(action as TimelineAction)
-      else                         cameraActions.push(action as TimelineAction)
-    })
+  // Narration row: derived from narrationSegments prop (movable + resizable)
+  const narrationActions = useMemo<TimelineAction[]>(() =>
+    (narrationSegments ?? []).map((seg, i) => ({
+      id:       `narration-${seg.id}`,
+      start:    seg.startTime,
+      end:      seg.startTime + seg.duration,
+      effectId: 'narration',
+      movable:  true,
+      flexible: true,
+      data: { label: seg.text.slice(0, 24), pointIndex: i, type: 'narration', segId: seg.id },
+    } as RichAction as TimelineAction)),
+    [narrationSegments],
+  )
 
-    return [
-      { id: ROW_CAMERA,  actions: cameraActions  },
-      { id: ROW_CAPTION, actions: captionActions },
-    ]
-  }, [items])
+  // Full editorData: row order drives display sequence.
+  // `snapKey` included in deps so incrementing it creates a new array ref →
+  // autoReRender detects the change → camera/narration blocks snap back.
+  const editorData = useMemo<TimelineRow[]>(() => {
+    const rowMap: Record<string, TimelineRow> = {
+      [ROW_CAMERA]:    { id: ROW_CAMERA,    actions: cameraActions },
+      [ROW_NARRATION]: { id: ROW_NARRATION, actions: narrationActions },
+      [ROW_MUSIC]:     { id: ROW_MUSIC,     actions: localMusic },
+    }
+    void snapKey
+    return rowOrder.map(id => rowMap[id])
+  }, [cameraActions, narrationActions, localMusic, rowOrder, snapKey])
 
   // ── Scale count: ensure enough tick marks to cover all content ──────────
   const scaleCount = Math.max(20, Math.ceil(totalDuration) + 4)
 
-  // ── Callbacks ───────────────────────────────────────────────────────────
+  const rowH   = expanded ? ROW_HEIGHT_EXPANDED : ROW_HEIGHT
+  const totalH = SCALE_HEIGHT + rowH * NUM_ROWS
+
+  // ── Callbacks ─────────────────────────────────────────────────────────────
   const handleClickTime = useCallback(
     (time: number): boolean | undefined => {
       onTimeChange(time)
       return undefined
     },
-    [onTimeChange]
+    [onTimeChange],
   )
 
-  // Stop preview while dragging, then scrub in real-time
   const handleCursorDragStart = useCallback(
-    (time: number) => {
-      onPause()
-      onTimeChange(time)
-    },
-    [onPause, onTimeChange]
+    (time: number) => { onPause(); onTimeChange(time) },
+    [onPause, onTimeChange],
   )
 
   const handleCursorDrag = useCallback(
     (time: number) => { onTimeChange(time) },
-    [onTimeChange]
+    [onTimeChange],
   )
 
-  // ── Move/Hold-block resize (right edge only) ────────────────────────────
+  // Camera row: block left-edge resize; real-time duration update on right-edge drag
   const handleResizing = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }): boolean | void => {
-      // Block left-edge drag — only allow right edge
-      if (params.dir === 'left') return false
+      const { action, row, start, end, dir } = params
+      if (row.id === ROW_CAMERA) {
+        if (dir === 'left') return false
+        // Real-time update: subsequent blocks shift immediately as user drags
+        const rich = action as RichAction
+        if (rich.data?.pointIndex !== undefined) {
+          const dur = Math.max(0.1, end - start)
+          if (action.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, dur)
+          else if (action.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, dur)
+        }
+      }
       return undefined
     },
-    []
+    [onHoldDurationChange, onMoveDurationChange],
   )
 
   const handleResizeEnd = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }) => {
-      const rich = params.action as RichAction
-      if (rich.data?.pointIndex === undefined) return
-      const newDuration = Math.max(0.1, params.end - params.start)
-      if (rich.effectId === 'hold') {
-        onHoldDurationChange(rich.data.pointIndex, newDuration)
-      } else if (rich.effectId === 'move') {
-        onMoveDurationChange(rich.data.pointIndex, newDuration)
+      const { action, row, start, end } = params
+      const rich = action as RichAction
+      if (row.id === ROW_CAMERA) {
+        if (rich.data?.pointIndex === undefined) return
+        const newDuration = Math.max(0.1, end - start)
+        if (rich.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, newDuration)
+        else if (rich.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, newDuration)
+      } else if (row.id === ROW_NARRATION && onNarrationSegmentsChange && narrationSegments) {
+        const segId = (rich.data as Record<string, unknown>)?.segId as string | undefined
+        if (segId) {
+          const newDuration = Math.max(0.1, end - start)
+          onNarrationSegmentsChange(narrationSegments.map(s =>
+            s.id === segId ? { ...s, startTime: start, duration: newDuration } : s
+          ))
+        }
+      } else if (row.id === ROW_MUSIC) {
+        setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
+      } else {
+        setSnapKey(k => k + 1)
       }
     },
-    [onHoldDurationChange, onMoveDurationChange]
+    [onHoldDurationChange, onMoveDurationChange, narrationSegments, onNarrationSegmentsChange],
+  )
+
+  const handleMoveEnd = useCallback(
+    (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }) => {
+      const { action, row, start, end } = params
+      const rich = action as RichAction
+      if (row.id === ROW_NARRATION && onNarrationSegmentsChange && narrationSegments) {
+        const segId = (rich.data as Record<string, unknown>)?.segId as string | undefined
+        if (segId) {
+          const duration = end - start
+          onNarrationSegmentsChange(narrationSegments.map(s =>
+            s.id === segId ? { ...s, startTime: start, duration: Math.max(0.1, duration) } : s
+          ))
+        }
+      } else if (row.id === ROW_MUSIC) {
+        setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
+      } else {
+        // Camera: snap back (positions are fully derived from store)
+        setSnapKey(k => k + 1)
+      }
+    },
+    [narrationSegments, onNarrationSegmentsChange],
+  )
+
+  const handleRowDragEnd = useCallback(
+    ({ editorData: newData }: { row: TimelineRow; editorData: TimelineRow[] }) => {
+      setRowOrder(newData.map(r => r.id))
+    },
+    [],
   )
 
   const handleClickAction = useCallback(
     (_e: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow; time: number }) => {
       const rich = params.action as RichAction
-      if (rich.data?.pointIndex !== undefined) onPointSelect(rich.data.pointIndex)
+      if (params.row.id === ROW_CAMERA && rich.data?.pointIndex !== undefined) {
+        onPointSelect(rich.data.pointIndex)
+      }
     },
-    [onPointSelect]
+    [onPointSelect],
   )
 
-  // ── Theme-aware colours ─────────────────────────────────────────────────
+  // Double-click music row → add a 4-second music block at cursor position
+  const handleDoubleClickRow = useCallback(
+    (_e: React.MouseEvent, params: { row: TimelineRow; time: number }) => {
+      if (params.row.id !== ROW_MUSIC) return
+      const start      = Math.max(0, params.time - 2)
+      const end        = start + 4
+      const newAction: TimelineAction = {
+        id:       `music-${Date.now()}`,
+        start,
+        end,
+        effectId: 'music',
+        movable:  true,
+        flexible: true,
+        data:     { label: '音樂', pointIndex: -1, type: 'music' },
+      } as RichAction as TimelineAction
+      setLocalMusic(prev => [...prev, newAction])
+    },
+    [],
+  )
+
+  // Double-click music action → remove it
+  const handleDoubleClickAction = useCallback(
+    (_e: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow }) => {
+      if (params.row.id === ROW_MUSIC) {
+        setLocalMusic(prev => prev.filter(a => a.id !== params.action.id))
+      }
+    },
+    [],
+  )
+
+  // ── Theme-aware colours ────────────────────────────────────────────────
   const labelBg    = isDark ? 'hsl(217.2 32.6% 8%)'       : 'hsl(0 0% 100%)'
   const labelColor = isDark ? 'rgba(255,255,255,.50)'      : 'rgba(0,0,0,.45)'
   const borderCol  = isDark ? 'hsl(217.2 32.6% 17.5%)'    : 'hsl(214.3 31.8% 91.4%)'
   const scaleFg    = isDark ? 'rgba(255,255,255,.40)'      : 'rgba(0,0,0,.38)'
-  const totalH     = SCALE_HEIGHT + ROW_HEIGHT * 2
 
-  const getActionColors = (effectId: string) => {
-    switch (effectId) {
-      case 'move':    return { bg: 'rgba(37,99,235,.85)',  fg: '#ffffff' }
-      case 'hold':    return { bg: 'rgba(16,185,129,.82)', fg: '#ffffff' }
-      case 'caption': return { bg: 'rgba(234,179,8,.90)',  fg: '#1a1a1a' }
-      default:        return { bg: 'rgba(100,100,100,.6)', fg: '#ffffff' }
-    }
-  }
+  const hasContent = items.length > 0 || localMusic.length > 0 || (narrationSegments?.length ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-2 select-none" style={{ margin: '-10px' }}>
@@ -219,54 +350,73 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
             : <><Play  className="h-3 w-3" /><span>播放</span></>}
         </button>
         <span className="ml-auto">{formatTime(currentTime)} / {formatTime(totalDuration)}</span>
+        {onToggleExpanded && (
+          <button
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-muted hover:bg-muted/80 text-muted-foreground font-medium transition-colors"
+            onClick={onToggleExpanded}
+            title={expanded ? '收合時間軸' : '展開時間軸'}
+          >
+            {expanded
+              ? <><ChevronsDownUp className="h-3 w-3" /><span className="text-xs">收合</span></>
+              : <><ChevronsUpDown className="h-3 w-3" /><span className="text-xs">展開</span></>}
+          </button>
+        )}
       </div>
 
       {/* ── Main container with fixed height ── */}
       <div
         ref={rootRef}
         className="rounded-xl border overflow-hidden relative"
-        style={{ height: totalH, background: labelBg, borderColor: borderCol }}
+        style={{ height: totalH, background: labelBg, borderColor: borderCol, transition: 'height 0.2s ease' }}
       >
-        {items.length === 0 ? (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-            新增鏡頭後，這裡會顯示移動、停留與字幕區塊。
+        {!hasContent ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
+            <span>新增鏡頭後，這裡會顯示移動、停留與旁白區塊。</span>
+            <span style={{ fontSize: 10, opacity: 0.6 }}>雙擊音樂列可新增音樂片段</span>
           </div>
         ) : (
           <>
             {/* ── Row labels (overlay above Timeline's startLeft area) ── */}
             <div
               className="absolute z-20 pointer-events-none"
-              style={{ top: SCALE_HEIGHT, left: 0, width: START_LEFT, height: ROW_HEIGHT * 2 }}
+              style={{ top: SCALE_HEIGHT, left: 0, width: START_LEFT, height: rowH * NUM_ROWS }}
             >
-              {(['鏡頭', '字幕'] as const).map(label => (
+              {rowOrder.map((id, i) => (
                 <div
-                  key={label}
-                  className="flex items-center justify-center text-[11px] font-medium"
+                  key={id}
+                  className="absolute flex items-center justify-center text-[11px] font-medium"
                   style={{
-                    height:      ROW_HEIGHT,
-                    color:       labelColor,
-                    background:  labelBg,
-                    borderRight: `1px solid ${borderCol}`,
+                    top:          i * rowH,
+                    left:         0,
+                    width:        START_LEFT,
+                    height:       rowH,
+                    color:        labelColor,
+                    background:   labelBg,
+                    borderRight:  `1px solid ${borderCol}`,
+                    borderBottom: i < NUM_ROWS - 1 ? `1px solid ${borderCol}` : 'none',
                   }}
                 >
-                  {label}
+                  {ROW_LABELS[id]}
                 </div>
               ))}
             </div>
 
             {/* ── Timeline component ── */}
             <Timeline
+              key={rowH}
               ref={timelineRef}
               editorData={editorData}
               effects={EFFECTS}
-              /* 1 second per tick mark; SCALE_WIDTH px per mark */
               scale={1}
               scaleSplitCount={4}
               scaleWidth={SCALE_WIDTH}
               startLeft={START_LEFT}
-              rowHeight={ROW_HEIGHT}
+              rowHeight={rowH}
               minScaleCount={scaleCount}
               maxScaleCount={scaleCount}
+              gridSnap
+              dragLine
+              enableRowDrag
               autoScroll
               autoReRender
               style={{ width: '100%', height: totalH, background: 'transparent' }}
@@ -279,47 +429,59 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               onCursorDrag={handleCursorDrag}
               onActionResizing={handleResizing}
               onActionResizeEnd={handleResizeEnd}
+              onActionMoveEnd={handleMoveEnd}
+              onRowDragEnd={handleRowDragEnd}
               onClickAction={handleClickAction}
-              getActionRender={(action: TimelineAction) => {
-                const { bg, fg } = getActionColors(action.effectId)
+              onDoubleClickRow={handleDoubleClickRow}
+              onDoubleClickAction={handleDoubleClickAction}
+              getActionRender={(action: TimelineAction, row: TimelineRow) => {
                 const rich = action as RichAction
+                const dur  = (action.end - action.start).toFixed(1)
+                const { bg, fg } = getActionColors(action.effectId, row.id)
                 return (
                   <div
+                    title={row.id === ROW_MUSIC ? '雙擊刪除' : undefined}
                     style={{
                       width: '100%', height: '100%',
-                      borderRadius: 5,
+                      borderRadius: 3,
                       background: bg, color: fg,
                       display: 'flex', alignItems: 'center',
-                      paddingLeft: 6,
+                      paddingLeft: 6, paddingRight: 5,
                       fontSize: 11, fontWeight: 700,
-                      overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                      overflow: 'hidden',
                       cursor: 'pointer',
+                      userSelect: 'none',
                     }}
                   >
-                    {rich.data?.label ?? ''}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {rich.data?.label ?? ''}
+                    </span>
+                    <span style={{ fontSize: 10, opacity: 0.72, marginLeft: 4, flexShrink: 0, fontWeight: 500 }}>
+                      {dur}s
+                    </span>
                   </div>
                 )
               }}
             />
+
+            {/* Music row hint when empty */}
+            {localMusic.length === 0 && (
+              <div
+                className="absolute pointer-events-none flex items-center text-[10px]"
+                style={{
+                  top:     SCALE_HEIGHT + rowOrder.indexOf(ROW_MUSIC) * rowH,
+                  left:    START_LEFT + 8,
+                  height:  rowH,
+                  color:   labelColor,
+                  opacity: 0.5,
+                }}
+              >
+                雙擊新增音樂片段
+              </div>
+            )}
           </>
         )}
       </div>
-
-      {/* ── Legend ── */}
-      {/* {items.length > 0 && (
-        <div className="flex gap-4 text-xs text-muted-foreground px-1 flex-wrap">
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: 'rgba(37,99,235,.85)' }} />移動
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: 'rgba(16,185,129,.82)' }} />停留
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: 'rgba(234,179,8,.90)' }} />字幕
-          </span>
-          <span className="ml-auto">總時長 {formatTime(totalDuration)}</span>
-        </div>
-      )} */}
     </div>
   )
 })

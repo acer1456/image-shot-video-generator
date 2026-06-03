@@ -1,41 +1,190 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
-import { ThemeProvider, useTheme } from 'next-themes'
+import { ThemeProvider } from 'next-themes'
 import CanvasEditor from '@/components/CanvasEditor'
-import CameraPanel from '@/components/CameraPanel'
-import CaptionEditor from '@/components/CaptionEditor'
-import AssistPanel from '@/components/AssistPanel'
 import TimelinePanel from '@/components/TimelinePanel'
 import type { TimelinePanelHandle } from '@/components/TimelinePanel'
 import AiGeneratePanel from '@/components/AiGeneratePanel'
 import { MasterworkPickerModal } from '@/components/MasterworkPickerModal'
+import { AppToolbar } from '@/components/AppToolbar'
+import { CanvasSection } from '@/components/CanvasSection'
+import { EditorSidebar } from '@/components/EditorSidebar'
+import { NarrationSidebar } from '@/components/NarrationSidebar'
+import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
 import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
-import type { CameraPoint, CaptionData, DragState, ActiveTab } from '@/types'
+import type { CameraPoint, CaptionData, DragState, ActiveTab, NarrationSegment, SubtitleStyle } from '@/types'
+import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import {
-  OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName,
+  clamp, normalizeProjectName,
   sanitizeFileName, getTodayString, nextFrame, wait,
-  getBestVideoMimeType, formatTime
+  getBestVideoMimeType,
 } from '@/lib/utils'
 import {
-  drawCamera as doDrawCamera, drawOutputBackground,
-  getTimelineStateAt, buildTimeline
+  drawCamera as doDrawCamera,
+  getTimelineStateAt, buildTimeline,
+  wrapWordsToLines,
 } from '@/lib/canvas'
-import {
-  Sun, Moon, Save, FolderOpen, Trash2, Film,
-  Maximize, Maximize2, Upload, Camera, Type, Settings, MoreHorizontal, ChevronDown, X,
-  Sparkles, Palette, Loader2
-} from 'lucide-react'
-import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { convertPointsCaptions, type ChineseConversion } from '@/lib/chinese'
 import type { AiGenerateResult } from '@/lib/openrouter'
+import { OUTPUT_W, OUTPUT_H } from '@/lib/utils'
+
+const AUTOSAVE_KEY = 'artful_autosave'
+
+// Returns the visible (accumulated) text for narration subtitles at a given time.
+// Characters reveal linearly across the segment duration.
+/** Split words into groups of up to wordsPerLine words each (line heuristic). */
+function splitToLineGroups(words: string[], wordsPerLine = 4): string[][] {
+  const groups: string[][] = []
+  for (let i = 0; i < words.length; i += wordsPerLine) {
+    groups.push(words.slice(i, i + wordsPerLine))
+  }
+  return groups
+}
+
+/**
+ * Returns the visible (progressive-reveal) narration subtitle text at the given time.
+ *
+ * When measureCtx + measureStyle are provided the card boundaries are built using
+ * the SAME pixel-measured word-wrap as drawNarrationSubtitle, so every word that
+ * belongs to a card is guaranteed to fit within 2 rendered lines.  No words are
+ * ever lost due to a line-count cap in the renderer.
+ *
+ * When measureCtx is absent (e.g. during SSR or unit tests) the function falls back
+ * to the 4-words-per-line heuristic.
+ */
+function getNarrationVisibleText(
+  segs: NarrationSegment[],
+  time: number,
+  measureCtx?: CanvasRenderingContext2D | null,
+  measureStyle?: SubtitleStyle | null,
+): string {
+  const seg = segs.find(s => time >= s.startTime && time < s.startTime + s.duration)
+  if (!seg || !seg.text) return ''
+  const words = seg.text.split(' ').filter(w => w.length > 0)
+  if (!words.length) return ''
+  const elapsed = time - seg.startTime
+
+  // ── Card building ────────────────────────────────────────────────────────────
+  // A "card" is the group of words shown during one display window (≤ 2 rendered
+  // lines).  Cards must be built with the same wrapping logic used by the renderer
+  // so that every word in a card is guaranteed to appear on screen.
+  let cardWordLists: string[][]
+
+  if (measureCtx) {
+    // Pixel-aware path: measure with the exact same font as drawNarrationSubtitle.
+    const sizeRatio = measureStyle?.fontSizeRatio ?? 0.055
+    const fontFamily = measureStyle?.fontFamily ?? "Georgia, 'Times New Roman', serif"
+    const fontSize = Math.round(OUTPUT_W * sizeRatio)
+    const sidePadding = Math.round(OUTPUT_W * 0.06)
+    const maxLineWidth = OUTPUT_W - sidePadding * 2
+    const prevFont = measureCtx.font
+    measureCtx.font = `700 ${fontSize}px ${fontFamily}`
+    const allLines = wrapWordsToLines(words, measureCtx, maxLineWidth)
+    measureCtx.font = prevFont  // restore canvas state
+    // Group pixel-wrapped lines into cards of ≤ 2 lines each.
+    cardWordLists = []
+    for (let i = 0; i < allLines.length; i += 2) {
+      cardWordLists.push(
+        allLines.slice(i, i + 2).join(' ').split(' ').filter(w => w.length > 0)
+      )
+    }
+  } else {
+    // Fallback: 4 words per line, 2 lines per card (character heuristic).
+    const lineGroups = splitToLineGroups(words, 4)
+    cardWordLists = []
+    for (let i = 0; i < lineGroups.length; i += 2) {
+      cardWordLists.push(lineGroups.slice(i, i + 2).flat())
+    }
+  }
+
+  // ── Timing ───────────────────────────────────────────────────────────────────
+  // Time budget per card proportional to its character count.
+  const cardChars = cardWordLists.map(wl => wl.reduce((s, w) => s + Math.max(w.length, 1), 0))
+  const totalChars = cardChars.reduce((a, b) => a + b, 0)
+  let cumChars = 0
+  const cardOnsets = cardChars.map(count => {
+    const onset = (cumChars / totalChars) * seg.duration
+    cumChars += count
+    return onset
+  })
+
+  // Small advance (100 ms) to compensate for visual perception lag.
+  const effectiveElapsed = elapsed + 0.1
+
+  let cardIndex = 0
+  for (let i = 0; i < cardOnsets.length; i++) {
+    if (cardOnsets[i] <= effectiveElapsed) cardIndex = i
+  }
+
+  const cardWords = cardWordLists[cardIndex]
+  const cardStart = cardOnsets[cardIndex]
+  const cardEnd = cardIndex + 1 < cardOnsets.length ? cardOnsets[cardIndex + 1] : seg.duration
+  const cardDuration = Math.max(cardEnd - cardStart, 0.01)
+
+  // ── Progressive word reveal within the card ───────────────────────────────
+  const wordChars = cardWords.map(w => Math.max(w.length, 1))
+  const cardTotalChars = wordChars.reduce((a, b) => a + b, 0)
+  let cumWordChars = 0
+  const wordOnsets = wordChars.map(count => {
+    const onset = cardStart + (cumWordChars / cardTotalChars) * cardDuration
+    cumWordChars += count
+    return onset
+  })
+
+  let wordsToShow = 1
+  for (let i = 0; i < wordOnsets.length; i++) {
+    if (wordOnsets[i] <= effectiveElapsed) wordsToShow = i + 1
+  }
+  return cardWords.slice(0, wordsToShow).join(' ')
+}
+
+/** Returns the full text of the narration segment at the given time (no progressive reveal). */
+function getNarrationFullText(segs: NarrationSegment[], time: number): string {
+  const seg = segs.find(s => time >= s.startTime && time < s.startTime + s.duration)
+  return seg?.text ?? ''
+}
+
+// Schedule narration audio segments from the given start time using Web Audio API.
+function scheduleNarrationAudio(
+  segs: NarrationSegment[],
+  fromTime: number,
+  ctxRef: React.MutableRefObject<AudioContext | null>,
+  sourcesRef: React.MutableRefObject<AudioBufferSourceNode[]>
+) {
+  // Stop previously scheduled sources
+  for (const src of sourcesRef.current) { try { src.stop() } catch { /* already stopped */ } }
+  sourcesRef.current = []
+  if (!segs.length) return
+  if (!ctxRef.current || ctxRef.current.state === 'closed') {
+    ctxRef.current = new AudioContext()
+  }
+  const ctx = ctxRef.current
+  for (const seg of segs) {
+    if (!seg.audioData || !seg.samplingRate) continue
+    if (seg.startTime + seg.duration <= fromTime) continue  // already past
+    const buffer = ctx.createBuffer(1, seg.audioData.length, seg.samplingRate)
+    buffer.copyToChannel(seg.audioData, 0)
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.connect(ctx.destination)
+    const delay = seg.startTime - fromTime
+    if (delay >= 0) {
+      source.start(ctx.currentTime + delay)
+    } else {
+      const offset = Math.min(-delay, seg.duration - 0.01)
+      source.start(ctx.currentTime, offset)
+    }
+    sourcesRef.current.push(source)
+  }
+}
+
+function stopNarrationAudio(sourcesRef: React.MutableRefObject<AudioBufferSourceNode[]>) {
+  for (const src of sourcesRef.current) { try { src.stop() } catch { /* already stopped */ } }
+  sourcesRef.current = []
+}
 
 function AppInner() {
   const store = useAppStore()
-  const { theme, setTheme } = useTheme()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const loadProjectInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -43,13 +192,14 @@ function AppInner() {
   const currentTimeRef = useRef(0)
   const previewCancelRef = useRef(false)
   const timelinePanelRef = useRef<TimelinePanelHandle>(null)
-  /** Timestamp of last setCurrentTime call — used to throttle React re-renders to ~15fps */
   const lastUiUpdateRef = useRef(0)
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
   const [forceRedraw, setForceRedraw] = useState(0)
+  const [showRestoreModal, setShowRestoreModal] = useState(false)
+  const [pendingRestore, setPendingRestore] = useState<Record<string, unknown> | null>(null)
   const [totalDuration, setTotalDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
-  const [isFocusMode, setIsFocusMode] = useState(false)
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false)
@@ -57,35 +207,144 @@ function AppInner() {
   const [loadingPainting, setLoadingPainting] = useState(false)
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0)
   const [renderProgress, setRenderProgress] = useState(0)
+  const [isTimelineExpanded, setIsTimelineExpanded] = useState(false)
+  const [narrationSegments, setNarrationSegments] = useState<NarrationSegment[]>([])
+  const [narrationInputText, setNarrationInputText] = useState('')
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE)
+  const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
-  // Reset active caption to primary whenever the selected camera point changes
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
+
+  // 啟動時檢查是否有自動暫存資料
+  useEffect(() => {
+    const saved = localStorage.getItem(AUTOSAVE_KEY)
+    if (!saved) return
+    try {
+      const data = JSON.parse(saved) as Record<string, unknown>
+      const hasContent = (Array.isArray(data.points) && (data.points as unknown[]).length > 0) || !!data.image
+      if (data.app === 'auto-art-camera-tour' && hasContent) {
+        setPendingRestore(data)
+        setShowRestoreModal(true)
+      } else {
+        localStorage.removeItem(AUTOSAVE_KEY)
+      }
+    } catch {
+      localStorage.removeItem(AUTOSAVE_KEY)
+    }
+  }, [])
+
+  // 自動暫存（防抖 2 秒）
+  useEffect(() => {
+    if (!store.points.length && !store.image) return
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    autosaveTimerRef.current = setTimeout(() => {
+      try {
+        let imageDataUrl: string | null = null
+        if (store.image) {
+          const tmp = document.createElement('canvas')
+          tmp.width = store.image.width; tmp.height = store.image.height
+          tmp.getContext('2d')!.drawImage(store.image, 0, 0)
+          imageDataUrl = tmp.toDataURL('image/jpeg', 0.7)
+        }
+        const data = {
+          app: 'auto-art-camera-tour', version: 1,
+          name: store.projectName, savedAt: new Date().toISOString(),
+          image: imageDataUrl ? { dataUrl: imageDataUrl, width: store.image!.width, height: store.image!.height } : null,
+          backgroundSettings: store.backgroundSettings,
+          activeIndex: store.activeIndex, activeTab: store.activeTab,
+          points: store.points,
+          narrationInputText,
+          narrationSegments: narrationSegments.map(({ id, text, startTime, duration, samplingRate }) => ({ id, text, startTime, duration, samplingRate })),
+          subtitleStyle,
+        }
+        try {
+          localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
+        } catch {
+          // 空間不足時不含圖片重試
+          localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ ...data, image: null }))
+        }
+      } catch (err) {
+        console.warn('[autosave]', err)
+      }
+    }, 2000)
+    return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current) }
+  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationSegments, narrationInputText, subtitleStyle])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
-  /** 從 URL 載入畫作到 canvas（名畫庫使用） */
+  const handleRestoreAutosave = useCallback(() => {
+    if (!pendingRestore) return
+    const project = pendingRestore
+    store.setProjectName(normalizeProjectName(String(project.name || '未命名專案')))
+    store.setBackgroundSettings({
+      mode: (project.backgroundSettings as Record<string, unknown>)?.mode === 'blur' ? 'blur' : 'color',
+      color: String((project.backgroundSettings as Record<string, unknown>)?.color || '#000000'),
+      blur: clamp(Number((project.backgroundSettings as Record<string, unknown>)?.blur ?? 18), 0, 50),
+    })
+    const pts: CameraPoint[] = Array.isArray(project.points)
+      ? (project.points as Partial<CameraPoint>[]).map(normalizePoint) : []
+    store.setPoints(pts)
+    store.setActiveIndex(clamp(Number(project.activeIndex ?? -1), -1, Math.max(-1, pts.length - 1)))
+    const tab: ActiveTab = ['camera', 'caption', 'assist'].includes(String(project.activeTab))
+      ? project.activeTab as ActiveTab : 'camera'
+    store.setActiveTab(tab)
+    const img = project.image as Record<string, unknown> | null
+    if (img?.dataUrl) store.loadImageDataUrl(String(img.dataUrl))
+    else triggerRedraw()
+    // Restore narration input text
+    if (typeof project.narrationInputText === 'string') setNarrationInputText(project.narrationInputText)
+    // Restore narration segments (metadata only; audio must be regenerated)
+    if (Array.isArray(project.narrationSegments)) {
+      setNarrationSegments((project.narrationSegments as Partial<NarrationSegment>[]).map(s => ({
+        id: String(s.id ?? crypto.randomUUID()),
+        text: String(s.text ?? ''),
+        startTime: Number(s.startTime ?? 0),
+        duration: Number(s.duration ?? 0),
+        samplingRate: s.samplingRate != null ? Number(s.samplingRate) : undefined,
+        audioData: undefined,
+      })))
+    }
+    // Restore subtitle style
+    if (project.subtitleStyle && typeof project.subtitleStyle === 'object') {
+      const s = project.subtitleStyle as Record<string, unknown>
+      setSubtitleStyle({
+        fontFamily: typeof s.fontFamily === 'string' ? s.fontFamily : DEFAULT_SUBTITLE_STYLE.fontFamily,
+        fontSizeRatio: typeof s.fontSizeRatio === 'number' ? s.fontSizeRatio : DEFAULT_SUBTITLE_STYLE.fontSizeRatio,
+        shadowEnabled: typeof s.shadowEnabled === 'boolean' ? s.shadowEnabled : DEFAULT_SUBTITLE_STYLE.shadowEnabled,
+        shadowBlur: typeof s.shadowBlur === 'number' ? s.shadowBlur : DEFAULT_SUBTITLE_STYLE.shadowBlur,
+        shadowOpacity: typeof s.shadowOpacity === 'number' ? s.shadowOpacity : DEFAULT_SUBTITLE_STYLE.shadowOpacity,
+        subtitlePosition: s.subtitlePosition && typeof (s.subtitlePosition as Record<string, unknown>).x === 'number'
+          ? s.subtitlePosition as { x: number; y: number }
+          : DEFAULT_SUBTITLE_STYLE.subtitlePosition,
+      })
+    }
+    setPendingRestore(null)
+    setShowRestoreModal(false)
+  }, [pendingRestore, store, triggerRedraw])
+
+  const handleDiscardAutosave = useCallback(() => {
+    localStorage.removeItem(AUTOSAVE_KEY)
+    setPendingRestore(null)
+    setShowRestoreModal(false)
+  }, [])
+
   const loadImageFromUrl = useCallback(async (url: string, title: string) => {
     setLoadingPainting(true)
     try {
-      // Force HTTPS to avoid mixed-content blocks in PWA
       const safeUrl = url.replace(/^http:\/\//, 'https://')
-
       let blob: Blob | undefined
-
-      // 1st attempt: direct fetch (works for CORS-enabled servers e.g. ARTIC IIIF)
       try {
         const res = await fetch(safeUrl)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         blob = await res.blob()
       } catch {
-        // 2nd attempt: images.weserv.nl — dedicated image proxy with CORS headers;
-        // also resizes to 1600px to reduce file size for large print-quality images
         const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(safeUrl)}&w=1600&output=jpg`
         const res2 = await fetch(proxyUrl)
         if (!res2.ok) throw new Error(`proxy HTTP ${res2.status}`)
         blob = await res2.blob()
       }
-
       const ext = safeUrl.split('.').pop()?.split('?')[0]?.toLowerCase() ?? 'jpg'
       const file = new File([blob], `${title}.${ext}`, { type: blob.type || 'image/jpeg' })
       store.loadImageFile(file, !store.image, store.imageUrl)
@@ -119,8 +378,9 @@ function AppInner() {
     const state = getTimelineStateAt(store.image, store.points, time)
     if (!state) return
     store.setActiveIndex(state.pointIndex)
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide)
-  }, [getCanvas, store, snapGuide])
+    const narrationText = getNarrationVisibleText(narrationSegments, time, ctx, subtitleStyle)
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, subtitleStyle)
+  }, [getCanvas, store, snapGuide, narrationSegments])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
     const { items } = buildTimeline(store.points)
@@ -157,6 +417,8 @@ function AppInner() {
     store.setIsPreviewing(true)
     // Start from current cursor position (not always from 0)
     const startTime = currentTimeRef.current >= totalDuration ? 0 : currentTimeRef.current
+    // Schedule narration audio from the start position
+    scheduleNarrationAudio(narrationSegments, startTime, audioCtxRef, narrationSourcesRef)
     const wallStart = performance.now()
     while (true) {
       if (previewCancelRef.current) break
@@ -176,12 +438,13 @@ function AppInner() {
       if (t >= totalDuration) break
       await nextFrame()
     }
+    stopNarrationAudio(narrationSourcesRef)
     // Final accurate update for time display and cursor after playback ends
     setCurrentTime(currentTimeRef.current)
     timelinePanelRef.current?.setTimeCursor(currentTimeRef.current)
     store.setIsPreviewing(false)
     triggerRedraw()
-  }, [store, totalDuration, drawTimelineTime, triggerRedraw])
+  }, [store, totalDuration, drawTimelineTime, triggerRedraw, narrationSegments])
 
   // ---------- Render video ----------
   const renderVideo = useCallback(async (captionConversion: ChineseConversion = 'original') => {
@@ -216,9 +479,10 @@ function AppInner() {
       const drawFrame = (t: number) => {
         const state = getTimelineStateAt(store.image!, renderPoints, t)
         if (!state) return
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false })
+        const narText = getNarrationVisibleText(narrationSegments, t, offCtx, subtitleStyle) || undefined
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, subtitleStyle)
         if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false })
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, subtitleStyle)
         }
       }
 
@@ -275,7 +539,7 @@ function AppInner() {
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, triggerRedraw])
+  }, [store, getCanvas, triggerRedraw, narrationSegments])
   const saveProject = useCallback(async () => {
     try {
       const name = normalizeProjectName(store.projectName)
@@ -470,21 +734,6 @@ function AppInner() {
     }
   }, [])
 
-  const openFocusMode = useCallback(() => {
-    if (!store.image || store.isRendering) return
-    previewCancelRef.current = true
-    store.setIsPreviewing(false)
-    store.setActiveTab('camera')
-    setIsFocusMode(true)
-    triggerRedraw()
-  }, [store, triggerRedraw])
-
-  const closeFocusMode = useCallback(() => {
-    setIsFocusMode(false)
-    setSnapGuide({ x: false, y: false })
-    triggerRedraw()
-  }, [triggerRedraw])
-
   const openImmersiveMode = useCallback(() => {
     if (!store.image || store.isRendering) return
     previewCancelRef.current = true
@@ -505,16 +754,13 @@ function AppInner() {
   }, [triggerRedraw])
 
   useEffect(() => {
-    if (!isFocusMode && !isImmersiveMode) return
+    if (!isImmersiveMode) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (isFocusMode) closeFocusMode()
-        if (isImmersiveMode) closeImmersiveMode()
-      }
+      if (event.key === 'Escape') closeImmersiveMode()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isFocusMode, isImmersiveMode, closeFocusMode, closeImmersiveMode])
+  }, [isImmersiveMode, closeImmersiveMode])
 
   // ---------- Global Space = play / pause ----------
   useEffect(() => {
@@ -540,386 +786,160 @@ function AppInner() {
   const activePoint = store.points[store.activeIndex] || null
   const isDisabled = store.isRendering
 
+  const canvasEditorProps = {
+    image: store.image,
+    points: store.points,
+    activeIndex: store.activeIndex,
+    activeTab: store.activeTab,
+    backgroundSettings: store.backgroundSettings,
+    safeAreaVisibility: store.safeAreaVisibility,
+    showAllPoints: store.showAllPoints,
+    onlyActiveBox: store.onlyActiveBox,
+    showCaptionBox: store.showCaptionBox,
+    showGuidesInPreview: store.showGuidesInPreview,
+    isRendering: store.isRendering,
+    isPreviewing: store.isPreviewing,
+    onPointAdd: handlePointAdd,
+    onPointMove: handlePointMove,
+    onPointResize: handlePointResize,
+    onPointSelect: selectPointAndSyncTimeline,
+    onCaptionMove: handleCaptionMove,
+    onCaptionFontResize: handleCaptionFontResize,
+    onCaptionBoxWidth: handleCaptionBoxWidth,
+    onCaptionBoxHeight: handleCaptionBoxHeight,
+    onDragEnd: triggerRedraw,
+    onPointDelete: (i: number) => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() },
+    onEnterCaption: () => { store.setActiveTab('caption'); triggerRedraw() },
+    onBackToCamera: () => { store.setActiveTab('camera'); triggerRedraw() },
+    activeCaptionIndex,
+    onCaptionSelect: setActiveCaptionIndex,
+    snapGuide,
+    setSnapGuide,
+    dragStateRef,
+    currentTimeRef,
+    forceRedraw,
+    narrationText: narrationSegments.length > 0
+      ? getNarrationFullText(narrationSegments, getPointFocusTime(store.activeIndex)) || undefined
+      : undefined,
+    subtitleStyle,
+    onSubtitlePositionChange: (pos: { x: number; y: number }) =>
+      setSubtitleStyle(s => ({ ...s, subtitlePosition: pos })),
+  } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
-      {/* Top Toolbar */}
-      <header className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm flex-shrink-0">
-        <div className="flex-shrink-0 flex flex-col mr-1 leading-tight">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground whitespace-nowrap">9:16 Video Studio</span>
-          <span className="text-sm font-extrabold whitespace-nowrap">畫作鏡頭影片產生器</span>
-        </div>
+      <AppToolbar
+        isDisabled={isDisabled}
+        loadingPainting={loadingPainting}
+        isRendering={store.isRendering}
+        renderProgress={renderProgress}
+        hasImage={!!store.image}
+        hasPoints={!!store.points.length}
+        projectName={store.projectName}
+        fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
+        loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
+        onProjectNameChange={name => store.setProjectName(normalizeProjectName(name))}
+        onImageFile={file => store.loadImageFile(file, !store.image, store.imageUrl)}
+        onLoadFile={loadProject}
+        onOpenMasterworkPicker={() => setIsMasterworkPickerOpen(true)}
+        onOpenAiPanel={() => setIsAiPanelOpen(true)}
+        onRenderVideo={renderVideo}
+        onSave={saveProject}
+        onClearPoints={() => store.clearPoints()}
+        onRequestFullscreen={requestFullscreen}
+      />
 
-        <Separator orientation="vertical" className="h-8" />
-
-        {/* File upload */}
-        <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isDisabled || loadingPainting}>
-          <Upload className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">上傳圖片</span>
-        </Button>
-
-        {/* Masterwork picker */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setIsMasterworkPickerOpen(true)}
-          disabled={isDisabled || loadingPainting}
-          title="從名畫庫選擇圖片"
-        >
-          {loadingPainting
-            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            : <Palette className="h-3.5 w-3.5" />}
-          <span className="hidden sm:inline">{loadingPainting ? '載入中...' : '名畫庫'}</span>
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={e => {
-            const file = e.target.files?.[0]
-            // 已有圖片時只換底圖，保留所有鏡頭/字幕設定；第一次上傳才重置專案
-            if (file) store.loadImageFile(file, !store.image, store.imageUrl)
-            e.target.value = ''
-          }}
-        />
-
-        {/* Project name */}
-        <Input
-          value={store.projectName}
-          onChange={e => store.setProjectName(normalizeProjectName(e.target.value))}
-          className="h-8 w-36 text-xs"
-          placeholder="專案名稱"
-        />
-
-        <Separator orientation="vertical" className="h-8" />
-
-        <DropdownMenuPrimitive.Root>
-          <DropdownMenuPrimitive.Trigger asChild>
-            <Button size="sm" disabled={isDisabled || !store.image || !store.points.length}>
-              <Film className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">下載 MP4</span>
-              <ChevronDown className="h-3 w-3 ml-0.5" />
-            </Button>
-          </DropdownMenuPrimitive.Trigger>
-          <DropdownMenuPrimitive.Portal>
-            <DropdownMenuPrimitive.Content
-              align="end"
-              sideOffset={4}
-              className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
-            >
-              <DropdownMenuPrimitive.Item
-                className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-                onSelect={() => renderVideo('original')}
-              >
-                下載此版本影片
-              </DropdownMenuPrimitive.Item>
-              <DropdownMenuPrimitive.Item
-                className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-                onSelect={() => renderVideo('tw')}
-              >
-                下載繁體中文影片
-              </DropdownMenuPrimitive.Item>
-              <DropdownMenuPrimitive.Item
-                className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-                onSelect={() => renderVideo('cn')}
-              >
-                下載簡體中文影片
-              </DropdownMenuPrimitive.Item>
-            </DropdownMenuPrimitive.Content>
-          </DropdownMenuPrimitive.Portal>
-        </DropdownMenuPrimitive.Root>
-
-        {store.isRendering && (
-          <div className="flex items-center gap-1.5 ml-2">
-            <div className="w-28 h-1.5 bg-muted rounded-full overflow-hidden">
-              <div
-                className="h-full bg-primary rounded-full transition-all duration-100"
-                style={{ width: `${renderProgress}%` }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{renderProgress}%</span>
-          </div>
-        )}
-
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsAiPanelOpen(true)}
-            title="AI 自動產生內容"
-            className="text-primary"
-          >
-            <Sparkles className="h-4 w-4" />
-          </Button>
-
-          <Separator orientation="vertical" className="h-8" />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={saveProject}
-            title="保存專案"
-          >
-            <Save className="h-4 w-4" />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => loadProjectInputRef.current?.click()}
-            title="載入專案"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-          <input
-            ref={loadProjectInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={e => {
-              const file = e.target.files?.[0]
-              if (file) loadProject(file)
-              e.target.value = ''
-            }}
-          />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => store.clearPoints()}
-            title="清除所有點位"
-            disabled={!store.points.length}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-
-          <Separator orientation="vertical" className="h-8" />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title="切換深淺色模式"
-          >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={requestFullscreen}
-            title="全螢幕"
-          >
-            <Maximize className="h-4 w-4" />
-          </Button>
-        </div>
-      </header>
-
-      {/* Main content */}
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-3">
         <div className="flex flex-1 min-h-0 overflow-hidden gap-3">
-          {/* Left: Canvas */}
-          <div className="flex-1 min-w-0 min-h-0">
-            <div className="relative h-full min-h-0 rounded-xl border border-border bg-card overflow-hidden flex items-center justify-center">
-              {!isFocusMode ? (
-                <CanvasEditor
-                  image={store.image}
-                  points={store.points}
-                  activeIndex={store.activeIndex}
-                  activeTab={store.activeTab}
-                  backgroundSettings={store.backgroundSettings}
-                  safeAreaVisibility={store.safeAreaVisibility}
-                  showAllPoints={store.showAllPoints}
-                  onlyActiveBox={store.onlyActiveBox}
-                  showCaptionBox={store.showCaptionBox}
-                  showGuidesInPreview={store.showGuidesInPreview}
-                  isRendering={store.isRendering}
-                  isPreviewing={store.isPreviewing}
-                  onPointAdd={handlePointAdd}
-                  onPointMove={handlePointMove}
-                  onPointResize={handlePointResize}
-                  onPointSelect={selectPointAndSyncTimeline}
-                  onCaptionMove={handleCaptionMove}
-                  onCaptionFontResize={handleCaptionFontResize}
-                  onCaptionBoxWidth={handleCaptionBoxWidth}
-                  onCaptionBoxHeight={handleCaptionBoxHeight}
-                  onDragEnd={triggerRedraw}
-                  onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
-                  onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
-                  onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
-                  activeCaptionIndex={activeCaptionIndex}
-                  onCaptionSelect={setActiveCaptionIndex}
-                  snapGuide={snapGuide}
-                  setSnapGuide={setSnapGuide}
-                  dragStateRef={dragStateRef}
-                  currentTimeRef={currentTimeRef}
-                  forceRedraw={forceRedraw}
-                />
-              ) : (
-                <div className="text-sm text-muted-foreground">定位模式進行中，畫布已放大到前景。</div>
-              )}
+          <NarrationSidebar
+            segments={narrationSegments}
+            onSegmentsChange={setNarrationSegments}
+            inputText={narrationInputText}
+            onInputTextChange={setNarrationInputText}
+            subtitleStyle={subtitleStyle}
+            onSubtitleStyleChange={setSubtitleStyle}
+            collapsed={isNarrationCollapsed}
+            onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
+          />
+          <CanvasSection
+            isDisabled={isDisabled}
+            hasImage={!!store.image}
+            activeTab={store.activeTab}
+            onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
+            onOpenImmersiveMode={openImmersiveMode}
+            showAllPoints={store.showAllPoints}
+            onlyActiveBox={store.onlyActiveBox}
+            showCaptionBox={store.showCaptionBox}
+            showGuidesInPreview={store.showGuidesInPreview}
+            onToggle={(key, val) => {
+              if (key === 'showAllPoints') store.setShowAllPoints(val)
+              else if (key === 'onlyActiveBox') store.setOnlyActiveBox(val)
+              else if (key === 'showCaptionBox') store.setShowCaptionBox(val)
+              else if (key === 'showGuidesInPreview') store.setShowGuidesInPreview(val)
+              triggerRedraw()
+            }}
+            safeAreaVisibility={store.safeAreaVisibility}
+            onSafeAreaChange={(key, val) => { store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val }); triggerRedraw() }}
+            canvasEditorProps={canvasEditorProps}
+          />
 
-              <div className="absolute top-2 right-2 z-10 flex gap-1.5">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={isDisabled || !store.image}
-                  onClick={openFocusMode}
-                >
-                  <Maximize className="h-3.5 w-3.5" />
-                  定位模式
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={isDisabled || !store.image}
-                  onClick={openImmersiveMode}
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  沉浸式定位
-                </Button>
-              </div>
-
-              {store.activeTab === 'caption' && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-3 p-3 rounded-xl bg-black/60 backdrop-blur-sm">
-                  <p className="text-[10px] font-semibold text-white text-center">平台預覽</p>
-                  {(['ig', 'shorts', 'tiktok'] as const).map(key => (
-                    <div key={key} className="flex flex-col items-center gap-1.5">
-                      <span className="text-[9px] text-white/80 text-center leading-tight">
-                        {{ ig: 'IG Reels', shorts: 'YT Shorts', tiktok: 'TikTok' }[key]}
-                      </span>
-                      <Switch
-                        checked={store.safeAreaVisibility[key]}
-                        onCheckedChange={val => {
-                          store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val })
-                          triggerRedraw()
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right: Panel */}
-          <aside className="w-96 flex-shrink-0 rounded-xl border border-border bg-card overflow-y-auto">
-          <div className="p-4 border-b border-border">
-            <h2 className="text-base font-bold">鏡頭編輯器</h2>
-            <p className="text-xs text-muted-foreground mt-1">
-              {store.activeIndex >= 0
-                ? `目前選擇：鏡頭 ${store.activeIndex + 1}`
-                : '目前未選擇鏡頭'
-              }
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {store.activeTab === 'caption'
-                ? '字幕分頁顯示該鏡頭實際輸出畫面；可拖曳字幕與控制點。'
-                : '點擊畫作新增鏡頭；拖曳藍色點改位置；拖曳白色框角落改 zoom。'
-              }
-            </p>
-          </div>
-
-          <div className="p-4">
-            {/* Tab switcher */}
-            <Tabs className="mb-4">
-              <TabsList>
-                <TabsTrigger
-                  active={store.activeTab === 'camera'}
-                  onClick={() => { store.setActiveTab('camera'); triggerRedraw() }}
-                >
-                  <Camera className="h-3.5 w-3.5" />
-                  鏡頭
-                </TabsTrigger>
-                <TabsTrigger
-                  active={store.activeTab === 'caption'}
-                  onClick={() => { store.setActiveTab('caption'); triggerRedraw() }}
-                >
-                  <Type className="h-3.5 w-3.5" />
-                  字幕
-                </TabsTrigger>
-                <TabsTrigger
-                  active={store.activeTab === 'assist'}
-                  onClick={() => { store.setActiveTab('assist'); triggerRedraw() }}
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  輔助
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            {store.activeTab === 'camera' && (
-              <CameraPanel
-                points={store.points}
-                activeIndex={store.activeIndex}
-                hasImage={!!store.image}
-                image={store.image}
-                backgroundSettings={store.backgroundSettings}
-                onSelect={selectPointAndSyncTimeline}
-                onRemove={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
-                onUpdateField={handleUpdatePointField}
-                onAddStart={() => { store.addFullFramePoint('start', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() }}
-                onAddEnd={() => { store.addFullFramePoint('end', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() }}
-                onInsertAfter={handleInsertAfter}
-                onDuplicate={handleDuplicatePoint}
-                onReorder={handleReorderPoints}
-              />
-            )}
-
-            {store.activeTab === 'caption' && (
-              <CaptionEditor
-                point={activePoint}
-                disabled={!activePoint}
-                activeCaptionIndex={activeCaptionIndex}
-                onSetActiveCaptionIndex={setActiveCaptionIndex}
-                onAddCaption={handleAddCaption}
-                onDeleteCaption={handleDeleteCaption}
-                onUpdateCaption={handleUpdateCaption}
-                onUpdateHold={handleUpdateHold}
-                onCenter={() => {
-                  if (store.activeIndex >= 0) {
-                    if (activeCaptionIndex === 0) {
-                      const next = store.updateCaptionField(store.activeIndex, 'x', 0.5, store.points)
-                      store.updateCaptionField(store.activeIndex, 'y', 0.82, next)
-                    } else {
-                      const extraIndex = activeCaptionIndex - 1
-                      const next = store.updateExtraCaptionField(store.activeIndex, extraIndex, 'x', 0.5, store.points)
-                      store.updateExtraCaptionField(store.activeIndex, extraIndex, 'y', 0.82, next)
-                    }
-                    triggerRedraw()
+          <EditorSidebar
+            points={store.points}
+            activeIndex={store.activeIndex}
+            activeTab={store.activeTab}
+            activePoint={activePoint}
+            activeCaptionIndex={activeCaptionIndex}
+            image={store.image}
+            backgroundSettings={store.backgroundSettings}
+            handlers={{
+              onSelect: selectPointAndSyncTimeline,
+              onRemovePoint: i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() },
+              onUpdateField: handleUpdatePointField,
+              onAddStart: () => { store.addFullFramePoint('start', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() },
+              onAddEnd: () => { store.addFullFramePoint('end', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() },
+              onInsertAfter: handleInsertAfter,
+              onDuplicate: handleDuplicatePoint,
+              onReorder: handleReorderPoints,
+              onOpenCaption: i => { selectPointAndSyncTimeline(i); store.setActiveTab('caption'); triggerRedraw() },
+              onApplyCaptionAsGlobal: () => {
+                const pt = store.points[store.activeIndex]
+                if (!pt) return
+                const { text: _t, subtitle: _s, x: _x, y: _y, ...style } = pt.caption
+                // 套用樣式到所有現有鏡頭（保留各自的文字與位置）
+                const updated = store.points.map(p => ({
+                  ...p,
+                  caption: { ...p.caption, ...style },
+                  extraCaptions: p.extraCaptions?.map(ec => ({ ...ec, ...style })),
+                }))
+                store.setPoints(updated)
+                // 同步設為未來新增鏡頭的預設樣式
+                store.setLastCaptionStyle(style)
+                triggerRedraw()
+              },
+              onSetActiveCaptionIndex: setActiveCaptionIndex,
+              onAddCaption: handleAddCaption,
+              onDeleteCaption: handleDeleteCaption,
+              onUpdateCaption: handleUpdateCaption,
+              onUpdateHold: handleUpdateHold,
+              onCenterCaption: () => {
+                if (store.activeIndex >= 0) {
+                  if (activeCaptionIndex === 0) {
+                    const next = store.updateCaptionField(store.activeIndex, 'x', 0.5, store.points)
+                    store.updateCaptionField(store.activeIndex, 'y', 0.82, next)
+                  } else {
+                    const extraIndex = activeCaptionIndex - 1
+                    const next = store.updateExtraCaptionField(store.activeIndex, extraIndex, 'x', 0.5, store.points)
+                    store.updateExtraCaptionField(store.activeIndex, extraIndex, 'y', 0.82, next)
                   }
-                }}
-              />
-            )}
-
-            {store.activeTab === 'assist' && (
-              <AssistPanel
-                backgroundSettings={store.backgroundSettings}
-                onBackgroundChange={s => { store.setBackgroundSettings(s); triggerRedraw() }}
-                showAllPoints={store.showAllPoints}
-                onlyActiveBox={store.onlyActiveBox}
-                showCaptionBox={store.showCaptionBox}
-                showGuidesInPreview={store.showGuidesInPreview}
-                onToggle={(key, val) => {
-                  if (key === 'showAllPoints') store.setShowAllPoints(val)
-                  else if (key === 'onlyActiveBox') store.setOnlyActiveBox(val)
-                  else if (key === 'showCaptionBox') store.setShowCaptionBox(val)
-                  else if (key === 'showGuidesInPreview') store.setShowGuidesInPreview(val)
                   triggerRedraw()
-                }}
-                safeAreaVisibility={store.safeAreaVisibility}
-                onSafeAreaChange={(key, val) => {
-                  store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val })
-                  triggerRedraw()
-                }}
-              />
-            )}
-          </div>
-        </aside>
-
+                }
+              },
+              onTabChange: tab => { store.setActiveTab(tab); triggerRedraw() },
+              onBackgroundChange: s => { store.setBackgroundSettings(s); triggerRedraw() },
+            }}
+          />
         </div>
 
-        {/* Timeline - full width */}
         <div className="flex-shrink-0 rounded-xl border border-border bg-card p-3">
           <TimelinePanel
             ref={timelinePanelRef}
@@ -928,6 +948,8 @@ function AppInner() {
             totalDuration={totalDuration}
             isPreviewing={store.isPreviewing}
             isDisabled={isDisabled || !store.image}
+            expanded={isTimelineExpanded}
+            onToggleExpanded={() => setIsTimelineExpanded(v => !v)}
             onTimeChange={t => {
               store.setIsPreviewing(false)
               drawTimelineTime(t, store.showGuidesInPreview)
@@ -945,8 +967,10 @@ function AppInner() {
               triggerRedraw()
             }}
             onPlay={previewPath}
-            onPause={() => { previewCancelRef.current = true; store.setIsPreviewing(false) }}
+            onPause={() => { previewCancelRef.current = true; store.setIsPreviewing(false); stopNarrationAudio(narrationSourcesRef) }}
             onPointSelect={selectPointAndSyncTimeline}
+            narrationSegments={narrationSegments}
+            onNarrationSegmentsChange={setNarrationSegments}
           />
         </div>
       </div>
@@ -966,146 +990,36 @@ function AppInner() {
       />
 
       {isImmersiveMode && (
-        <div className={`${isImmersiveLeaving ? 'immersive-leave' : 'immersive-enter'} fixed inset-0 z-[95] bg-black/90 flex items-center justify-center`}>
-          {/* 關閉按鈕 */}
-          <button
-            className="absolute top-4 right-4 z-10 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors"
-            onClick={closeImmersiveMode}
-            title="離開沉浸式定位 (Esc)"
-          >
-            <X className="h-5 w-5" />
-          </button>
-
-          {/* 9:16 畫布容器，盡量撐大但不超出視窗 */}
-          <div
-            className={`${isImmersiveLeaving ? 'immersive-canvas-leave' : 'immersive-canvas-enter'} relative rounded-2xl overflow-hidden border border-white/10`}
-            style={{
-              aspectRatio: '9 / 16',
-              maxHeight: 'calc(100vh - 32px)',
-              maxWidth: 'calc(100vw - 32px)',
-            }}
-          >
-            <CanvasEditor
-              image={store.image}
-              points={store.points}
-              activeIndex={store.activeIndex}
-              activeTab={store.activeTab}
-              backgroundSettings={store.backgroundSettings}
-              safeAreaVisibility={store.safeAreaVisibility}
-              showAllPoints={store.showAllPoints}
-              onlyActiveBox={store.onlyActiveBox}
-              showCaptionBox={store.showCaptionBox}
-              showGuidesInPreview={store.showGuidesInPreview}
-              isRendering={store.isRendering}
-              isPreviewing={store.isPreviewing}
-              onPointAdd={handlePointAdd}
-              onPointMove={handlePointMove}
-              onPointResize={handlePointResize}
-              onPointSelect={selectPointAndSyncTimeline}
-              onCaptionMove={handleCaptionMove}
-              onCaptionFontResize={handleCaptionFontResize}
-              onCaptionBoxWidth={handleCaptionBoxWidth}
-              onCaptionBoxHeight={handleCaptionBoxHeight}
-              onDragEnd={triggerRedraw}
-              onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
-              onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
-              onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
-              activeCaptionIndex={activeCaptionIndex}
-              onCaptionSelect={setActiveCaptionIndex}
-              snapGuide={snapGuide}
-              setSnapGuide={setSnapGuide}
-              dragStateRef={dragStateRef}
-              currentTimeRef={currentTimeRef}
-              forceRedraw={forceRedraw}
-            />
-          </div>
-        </div>
+        <ImmersiveOverlay
+          isLeaving={isImmersiveLeaving}
+          onClose={closeImmersiveMode}
+          canvasEditorProps={canvasEditorProps}
+        />
       )}
 
-      {isFocusMode && (
-        <div className="fixed inset-0 z-[80] bg-background/90 backdrop-blur-sm">
-          <div className="h-full p-3 md:p-5 flex flex-col gap-3">
-            <div className="rounded-xl border border-border bg-card px-3 py-2.5 flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm md:text-base font-bold">鏡頭定位模式</h3>
-                <p className="text-xs text-muted-foreground">拖曳畫布上的藍點或白色框角落調整鏡頭。按 Esc 或「完成定位」回到原本介面。</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={requestFullscreen}>
-                  <Maximize className="h-3.5 w-3.5" />
-                  全螢幕
-                </Button>
-                <Button size="sm" onClick={closeFocusMode}>
-                  <X className="h-3.5 w-3.5" />
-                  完成定位
-                </Button>
-              </div>
+      {/* 自動暫存還原 Modal */}
+      {showRestoreModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-xl p-6 w-80 shadow-2xl flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <h2 className="text-base font-semibold">發現未完成的工作</h2>
+              <p className="text-sm text-muted-foreground">
+                找到上次未完成的專案「{String(pendingRestore?.name ?? '未命名')}」，要繼續編輯嗎？
+              </p>
+              {Boolean(pendingRestore?.savedAt) && (
+                <p className="text-xs text-muted-foreground">
+                  暫存於 {new Date(String(pendingRestore!.savedAt)).toLocaleString('zh-TW')}
+                </p>
+              )}
             </div>
-
-            <div className="flex-1 min-h-0 flex gap-3">
-              <div className="flex-1 min-w-0 rounded-2xl border border-border bg-card overflow-hidden flex items-center justify-center">
-                <CanvasEditor
-                  image={store.image}
-                  points={store.points}
-                  activeIndex={store.activeIndex}
-                  activeTab={store.activeTab}
-                  backgroundSettings={store.backgroundSettings}
-                  safeAreaVisibility={store.safeAreaVisibility}
-                  showAllPoints={store.showAllPoints}
-                  onlyActiveBox={store.onlyActiveBox}
-                  showCaptionBox={store.showCaptionBox}
-                  showGuidesInPreview={store.showGuidesInPreview}
-                  isRendering={store.isRendering}
-                  isPreviewing={store.isPreviewing}
-                  onPointAdd={handlePointAdd}
-                  onPointMove={handlePointMove}
-                  onPointResize={handlePointResize}
-                    onPointSelect={selectPointAndSyncTimeline}
-                  onCaptionMove={handleCaptionMove}
-                  onCaptionFontResize={handleCaptionFontResize}
-                  onCaptionBoxWidth={handleCaptionBoxWidth}
-                  onCaptionBoxHeight={handleCaptionBoxHeight}
-                  onDragEnd={triggerRedraw}
-                  onPointDelete={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
-                  onEnterCaption={() => { store.setActiveTab('caption'); triggerRedraw() }}
-                  onBackToCamera={() => { store.setActiveTab('camera'); triggerRedraw() }}
-                  activeCaptionIndex={activeCaptionIndex}
-                  onCaptionSelect={setActiveCaptionIndex}
-                  snapGuide={snapGuide}
-                  setSnapGuide={setSnapGuide}
-                  dragStateRef={dragStateRef}
-                  currentTimeRef={currentTimeRef}
-                  forceRedraw={forceRedraw}
-                />
-              </div>
-
-              <aside className="hidden lg:block w-80 xl:w-96 rounded-2xl border border-border bg-card overflow-y-auto">
-                <div className="p-4 border-b border-border">
-                  <h4 className="text-sm font-bold">快速鏡頭清單</h4>
-                  <p className="text-xs text-muted-foreground mt-1">可直接切換鏡頭、調整 zoom 與停留秒數，並即時在放大畫布定位。</p>
-                </div>
-                <div className="p-4">
-                  <CameraPanel
-                    points={store.points}
-                    activeIndex={store.activeIndex}
-                    hasImage={!!store.image}
-                    image={store.image}
-                    backgroundSettings={store.backgroundSettings}
-                    onSelect={selectPointAndSyncTimeline}
-                    onRemove={i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() }}
-                    onUpdateField={handleUpdatePointField}
-                    onAddStart={() => { store.addFullFramePoint('start', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() }}
-                    onAddEnd={() => { store.addFullFramePoint('end', store.points, store.lastCaptionStyle, store.lastCameraSettings); triggerRedraw() }}
-                    onInsertAfter={handleInsertAfter}
-                    onDuplicate={handleDuplicatePoint}
-                    onReorder={handleReorderPoints}
-                  />
-                </div>
-              </aside>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={handleDiscardAutosave}>重新開始</Button>
+              <Button size="sm" onClick={handleRestoreAutosave}>繼續編輯</Button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   )
 }

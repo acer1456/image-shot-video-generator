@@ -10,6 +10,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
+      workbox: {
+        maximumFileSizeToCacheInBytes: 30 * 1024 * 1024, // 30 MiB — covers WASM + kokoro bundle
+      },
       manifest: {
         name: '畫作鏡頭影片產生器',
         short_name: 'ArtFilm',
@@ -29,6 +32,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')
+    }
+  },
+  optimizeDeps: {
+    exclude: ['@huggingface/transformers', 'kokoro-js']
+  },
+  server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
     }
   }
 })

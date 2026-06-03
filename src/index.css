@@ -70,11 +70,23 @@
   background-color: transparent !important;
   color: inherit !important;
 }
+/* Compact ruler + remove gap between ruler and rows */
+.timeline-editor-time-area {
+  height: 28px !important;
+}
+.timeline-editor-edit-area {
+  margin-top: 0 !important;
+}
+.timeline-editor-cursor {
+  top: 28px !important;
+  height: calc(100% - 28px) !important;
+}
 .timeline-editor-edit-row {
   background-image:
-    linear-gradient(hsl(var(--border) / 0.4), hsl(var(--border) / 0.4)),
     linear-gradient(90deg, hsl(var(--border) / 0.15) 1px, transparent 0) !important;
   background-color: transparent !important;
+  background-size: auto !important;
+  background-repeat: repeat !important;
 }
 .timeline-editor-time-unit {
   border-right-color: hsl(var(--border)) !important;
@@ -87,6 +99,9 @@
 }
 .timeline-editor-cursor-top {
   background: hsl(var(--primary)) !important;
+}
+.timeline-editor-action {
+  background-color: transparent !important;
 }
 .timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb {
   background: hsl(var(--border)) !important;

@@ -1,0 +1,189 @@
+import { useRef } from 'react'
+import { useTheme } from 'next-themes'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import {
+  Sun, Moon, Save, FolderOpen, Trash2, Film,
+  Maximize, Upload, ChevronDown, Sparkles, Palette, Loader2,
+} from 'lucide-react'
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { normalizeProjectName } from '@/lib/utils'
+import type { ChineseConversion } from '@/lib/chinese'
+
+interface AppToolbarProps {
+  isDisabled: boolean
+  loadingPainting: boolean
+  isRendering: boolean
+  renderProgress: number
+  hasImage: boolean
+  hasPoints: boolean
+  projectName: string
+  fileInputRef: React.RefObject<HTMLInputElement>
+  loadProjectInputRef: React.RefObject<HTMLInputElement>
+  onProjectNameChange: (name: string) => void
+  onImageFile: (file: File, isFirst: boolean) => void
+  onLoadFile: (file: File) => void
+  onOpenMasterworkPicker: () => void
+  onOpenAiPanel: () => void
+  onRenderVideo: (conv: ChineseConversion) => void
+  onSave: () => void
+  onClearPoints: () => void
+  onRequestFullscreen: () => void
+}
+
+export function AppToolbar({
+  isDisabled, loadingPainting, isRendering, renderProgress,
+  hasImage, hasPoints, projectName,
+  fileInputRef, loadProjectInputRef,
+  onProjectNameChange, onImageFile, onLoadFile,
+  onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
+  onSave, onClearPoints, onRequestFullscreen,
+}: AppToolbarProps) {
+  const { theme, setTheme } = useTheme()
+
+  return (
+    <header className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm flex-shrink-0">
+      {/* Branding */}
+      <div className="flex-shrink-0 flex flex-col mr-1 leading-tight">
+        <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground whitespace-nowrap">9:16 Video Studio</span>
+        <span className="text-sm font-extrabold whitespace-nowrap">畫作鏡頭影片產生器</span>
+      </div>
+
+      <Separator orientation="vertical" className="h-8" />
+
+      {/* Image upload */}
+      <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isDisabled || loadingPainting}>
+        <Upload className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">上傳圖片</span>
+      </Button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={e => {
+          const file = e.target.files?.[0]
+          if (file) onImageFile(file, !hasImage)
+          e.target.value = ''
+        }}
+      />
+
+      {/* Masterwork picker */}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onOpenMasterworkPicker}
+        disabled={isDisabled || loadingPainting}
+        title="從名畫庫選擇圖片"
+      >
+        {loadingPainting
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <Palette className="h-3.5 w-3.5" />}
+        <span className="hidden sm:inline">{loadingPainting ? '載入中...' : '名畫庫'}</span>
+      </Button>
+
+      {/* Project name */}
+      <Input
+        value={projectName}
+        onChange={e => onProjectNameChange(normalizeProjectName(e.target.value))}
+        className="h-8 w-36 text-xs"
+        placeholder="專案名稱"
+      />
+
+      <Separator orientation="vertical" className="h-8" />
+
+      {/* Render dropdown */}
+      <DropdownMenuPrimitive.Root>
+        <DropdownMenuPrimitive.Trigger asChild>
+          <Button size="sm" disabled={isDisabled || !hasImage || !hasPoints}>
+            <Film className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">下載 MP4</span>
+            <ChevronDown className="h-3 w-3 ml-0.5" />
+          </Button>
+        </DropdownMenuPrimitive.Trigger>
+        <DropdownMenuPrimitive.Portal>
+          <DropdownMenuPrimitive.Content
+            align="end"
+            sideOffset={4}
+            className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
+          >
+            <DropdownMenuPrimitive.Item
+              className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
+              onSelect={() => onRenderVideo('original')}
+            >
+              下載此版本影片
+            </DropdownMenuPrimitive.Item>
+            <DropdownMenuPrimitive.Item
+              className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
+              onSelect={() => onRenderVideo('tw')}
+            >
+              下載繁體中文影片
+            </DropdownMenuPrimitive.Item>
+            <DropdownMenuPrimitive.Item
+              className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
+              onSelect={() => onRenderVideo('cn')}
+            >
+              下載簡體中文影片
+            </DropdownMenuPrimitive.Item>
+          </DropdownMenuPrimitive.Content>
+        </DropdownMenuPrimitive.Portal>
+      </DropdownMenuPrimitive.Root>
+
+      {/* Render progress bar */}
+      {isRendering && (
+        <div className="flex items-center gap-1.5 ml-2">
+          <div className="w-28 h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-100"
+              style={{ width: `${renderProgress}%` }}
+            />
+          </div>
+          <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{renderProgress}%</span>
+        </div>
+      )}
+
+      {/* Right actions */}
+      <div className="ml-auto flex items-center gap-1.5">
+        <Button variant="ghost" size="icon" onClick={onOpenAiPanel} title="AI 自動產生內容" className="text-primary">
+          <Sparkles className="h-4 w-4" />
+        </Button>
+
+        <Separator orientation="vertical" className="h-8" />
+
+        <Button variant="ghost" size="icon" onClick={onSave} title="保存專案">
+          <Save className="h-4 w-4" />
+        </Button>
+
+        <Button variant="ghost" size="icon" onClick={() => loadProjectInputRef.current?.click()} title="載入專案">
+          <FolderOpen className="h-4 w-4" />
+        </Button>
+        <input
+          ref={loadProjectInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0]
+            if (file) onLoadFile(file)
+            e.target.value = ''
+          }}
+        />
+
+        <Button variant="ghost" size="icon" onClick={onClearPoints} title="清除所有點位" disabled={!hasPoints}>
+          <Trash2 className="h-4 w-4 text-destructive" />
+        </Button>
+
+        <Separator orientation="vertical" className="h-8" />
+
+        <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="切換深淺色模式">
+          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </Button>
+
+        <Button variant="ghost" size="icon" onClick={onRequestFullscreen} title="全螢幕">
+          <Maximize className="h-4 w-4" />
+        </Button>
+      </div>
+    </header>
+  )
+}

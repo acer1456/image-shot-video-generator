@@ -49,7 +49,7 @@ export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<C
   return {
     x: clamp(Number(raw?.x ?? 0.5), 0, 1),
     y: clamp(Number(raw?.y ?? 0.5), 0, 1),
-    zoom: clamp(Number(raw?.zoom ?? 1), 1, 8),
+    zoom: clamp(Number(raw?.zoom ?? 1), 1, 15),
     move: raw?.move === 'jump' ? 'jump' : 'slide',
     moveDuration: clamp(Number(raw?.moveDuration ?? 2), 0.1, 20),
     holdDuration: clamp(Number(raw?.holdDuration ?? 0.8), 0, 20),
@@ -201,7 +201,7 @@ export function useAppStore() {
     const newPt = makePoint(
       ref ? ref.x : 0.5,
       ref ? ref.y : 0.5,
-      ref ? clamp(ref.zoom, 1, 8) : 3,
+      ref ? clamp(ref.zoom, 1, 15) : 3,
       'slide', 2, 0.8,
       currentCameraSettings, currentLast
     )
