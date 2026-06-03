@@ -81,6 +81,7 @@ export function useAppStore() {
   const [lastCameraSettings, setLastCameraSettings] = useState<Partial<CameraPoint> | null>(null)
   const [lastVideoUrl, setLastVideoUrl] = useState<string | null>(null)
   const [previewCancelToken, setPreviewCancelToken] = useState(0)
+  const [renderResolution, setRenderResolution] = useState<'1080p' | '2k' | '4k'>('1080p')
 
   const rememberCaptionStyle = useCallback((idx: number, pts: CameraPoint[]) => {
     if (!pts[idx]) return
@@ -287,6 +288,7 @@ export function useAppStore() {
     lastCameraSettings, setLastCameraSettings,
     lastVideoUrl, setLastVideoUrl,
     previewCancelToken, setPreviewCancelToken,
+    renderResolution, setRenderResolution,
     rememberCaptionStyle,
     rememberCameraSettings,
     loadImageFile,

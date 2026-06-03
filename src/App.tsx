@@ -27,7 +27,7 @@ import {
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
   Maximize, Maximize2, Upload, Camera, Type, Settings, MoreHorizontal, ChevronDown, X,
-  Sparkles, Palette, Loader2
+  Sparkles, Palette, Loader2, Check
 } from 'lucide-react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { convertPointsCaptions, type ChineseConversion } from '@/lib/chinese'
@@ -80,7 +80,7 @@ function AppInner() {
       } catch {
         // 2nd attempt: images.weserv.nl — dedicated image proxy with CORS headers;
         // also resizes to 1600px to reduce file size for large print-quality images
-        const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(safeUrl)}&w=1600&output=jpg`
+        const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(safeUrl)}&w=3000&output=webp`
         const res2 = await fetch(proxyUrl)
         if (!res2.ok) throw new Error(`proxy HTTP ${res2.status}`)
         blob = await res2.blob()
@@ -193,8 +193,8 @@ function AppInner() {
         ? store.points
         : convertPointsCaptions(store.points, captionConversion)
       const { totalDuration: td } = buildTimeline(renderPoints)
-      const RENDER_FPS = 30
-      const FRAME_MS = Math.ceil(1000 / RENDER_FPS) // ~34 ms per frame
+      const RENDER_FPS = ({ '1080p': 30, '2k': 30, '4k': 24 } as const)[store.renderResolution] ?? 30
+      const FRAME_MS = Math.ceil(1000 / RENDER_FPS) // 4K→42ms, others→34ms
       const totalFrames = Math.ceil(td * RENDER_FPS) + 1
 
       // Dedicated offscreen canvas — completely isolated from the editor canvas.
@@ -202,9 +202,13 @@ function AppInner() {
       // capture stream, which caused progressive data loss on repeated exports.
       // Also lets us use fixed time-step rendering without touching the editor view.
       const off = document.createElement('canvas')
-      off.width = OUTPUT_W
-      off.height = OUTPUT_H
+      const RENDER_RESOLUTIONS = { '1080p': [1080, 1920], '2k': [1440, 2560], '4k': [2160, 3840] } as const
+      const [rw, rh] = RENDER_RESOLUTIONS[store.renderResolution] ?? [OUTPUT_W, OUTPUT_H]
+      off.width = rw
+      off.height = rh
       const offCtx = off.getContext('2d')!
+      offCtx.imageSmoothingEnabled = true
+      offCtx.imageSmoothingQuality = 'high'
 
       // Also grab the editor canvas for live preview during export.
       // Since isRendering=true, CanvasEditor's drawBase() has an early-return guard
@@ -232,7 +236,9 @@ function AppInner() {
       const captureTrack = stream.getVideoTracks()[0] as any
       const chunks: BlobPart[] = []
       const mimeType = getBestVideoMimeType()
-      const recorder = new MediaRecorder(stream, { mimeType })
+      const RENDER_BITRATES = { '1080p': 25_000_000, '2k': 50_000_000, '4k': 80_000_000 } as const
+      const videoBitsPerSecond = RENDER_BITRATES[store.renderResolution] ?? 25_000_000
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond })
       recorder.ondataavailable = event => { if (event.data.size > 0) chunks.push(event.data) }
       const done = new Promise<void>((resolve, reject) => {
         recorder.onstop = () => resolve()
@@ -595,6 +601,40 @@ function AppInner() {
 
         <DropdownMenuPrimitive.Root>
           <DropdownMenuPrimitive.Trigger asChild>
+            <Button size="sm" variant="outline" title="輸出解析度">
+              <span className="text-xs font-mono">{store.renderResolution.toUpperCase()}</span>
+              <ChevronDown className="h-3 w-3 ml-0.5" />
+            </Button>
+          </DropdownMenuPrimitive.Trigger>
+          <DropdownMenuPrimitive.Portal>
+            <DropdownMenuPrimitive.Content
+              align="end"
+              sideOffset={4}
+              className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
+            >
+              <DropdownMenuPrimitive.RadioGroup
+                value={store.renderResolution}
+                onValueChange={v => store.setRenderResolution(v as '1080p' | '2k' | '4k')}
+              >
+                {(['1080p', '2k', '4k'] as const).map(r => (
+                  <DropdownMenuPrimitive.RadioItem
+                    key={r}
+                    value={r}
+                    className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent flex items-center gap-2"
+                  >
+                    <DropdownMenuPrimitive.ItemIndicator>
+                      <Check className="h-3 w-3" />
+                    </DropdownMenuPrimitive.ItemIndicator>
+                    {r === '1080p' ? '1080p  1080×1920' : r === '2k' ? '2K  1440×2560' : '4K  2160×3840'}
+                  </DropdownMenuPrimitive.RadioItem>
+                ))}
+              </DropdownMenuPrimitive.RadioGroup>
+            </DropdownMenuPrimitive.Content>
+          </DropdownMenuPrimitive.Portal>
+        </DropdownMenuPrimitive.Root>
+
+        <DropdownMenuPrimitive.Root>
+          <DropdownMenuPrimitive.Trigger asChild>
             <Button size="sm" disabled={isDisabled || !store.image || !store.points.length}>
               <Film className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">下載 MP4</span>
@@ -799,6 +839,10 @@ function AppInner() {
                   ))}
                 </div>
               )}
+
+              <div className="absolute bottom-2 left-2 z-10 px-2 py-0.5 rounded-md bg-black/50 backdrop-blur-sm text-[10px] font-mono text-white/70 select-none pointer-events-none">
+                {({ '1080p': '1080×1920', '2k': '1440×2560', '4k': '2160×3840' } as const)[store.renderResolution]}
+              </div>
             </div>
           </div>
 

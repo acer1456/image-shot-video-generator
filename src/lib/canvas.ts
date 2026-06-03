@@ -109,8 +109,8 @@ export function getCaptionLayout(
 ): CaptionLayout {
   const fontFamily = cap.fontFamily || DEFAULT_FONT
   const subtitleFontFamily = cap.subtitleFontFamily || DEFAULT_FONT
-  const mainSize = 56 * cap.scale
-  const subSize = 34 * cap.scale * (cap.subtitleScale || 1)
+  const mainSize = pxS(canvas, 56) * cap.scale
+  const subSize = pxS(canvas, 34) * cap.scale * (cap.subtitleScale || 1)
   const mainLine = mainSize * 1.25
   const subLine = subSize * 1.28
   const baseTextMaxW = canvas.width * 0.78
@@ -121,14 +121,14 @@ export function getCaptionLayout(
   const mainW = mainLines.length ? Math.max(...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`))) : 0
   const subW = subLines.length ? Math.max(...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) : 0
   void mainW; void subW
-  const gap = mainLines.length && subLines.length ? 18 * cap.scale : 0
+  const gap = mainLines.length && subLines.length ? pxS(canvas, 18) * cap.scale : 0
   const textH = mainLines.length * mainLine + gap + subLines.length * subLine
-  const padX = 38 * cap.scale
-  const padY = 24 * cap.scale
-  const baseW = Math.max(240, ...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`)), ...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) + padX * 2
+  const padX = pxS(canvas, 38) * cap.scale
+  const padY = pxS(canvas, 24) * cap.scale
+  const baseW = Math.max(pxS(canvas, 240), ...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`)), ...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) + padX * 2
   void baseW
-  const baseH = Math.max(70, textH + padY * 2)
-  const width = Math.min(canvas.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, 240 + padX * 2))
+  const baseH = Math.max(pxS(canvas, 70), textH + padY * 2)
+  const width = Math.min(canvas.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, pxS(canvas, 240) + padX * 2))
   const height = Math.min(canvas.height * 0.5, baseH * (cap.boxScaleY || 1))
   const cx = cap.x * canvas.width
   const cy = cap.y * canvas.height
@@ -212,7 +212,7 @@ export function drawCaption(
   if (hasText) {
     // ── Shadow box (hideable) ─────────────────────────────────────────
     if (cap.shadowBoxVisible !== false) {
-      roundRect(ctx, layout.x, layout.y, layout.width, layout.height, 28 * cap.scale)
+      roundRect(ctx, layout.x, layout.y, layout.width, layout.height, pxS(canvas, 28) * cap.scale)
       ctx.fillStyle = hexToRgba(cap.shadowColor || '#000000', cap.shadowAlpha ?? 0.48)
       ctx.fill()
     }
@@ -265,17 +265,19 @@ export function drawCaption(
   }
   if (includeGuides) {
     drawSnapGuides(canvas, ctx, snapGuide)
-    ctx.setLineDash([14, 10])
-    ctx.lineWidth = 4
+    ctx.setLineDash([pxS(canvas, 14), pxS(canvas, 10)])
+    ctx.lineWidth = pxS(canvas, 4)
     ctx.strokeStyle = 'rgba(251,191,36,.95)'
     ctx.strokeRect(layout.x, layout.y, layout.width, layout.height)
     ctx.setLineDash([])
+    const h28 = pxS(canvas, 28); const h14 = pxS(canvas, 14)
+    const h34 = pxS(canvas, 34); const h68 = pxS(canvas, 68)
     ctx.fillStyle = '#fbbf24'
-    ctx.fillRect(layout.x + layout.width - 28, layout.y + layout.height - 28, 28, 28)
+    ctx.fillRect(layout.x + layout.width - h28, layout.y + layout.height - h28, h28, h28)
     ctx.fillStyle = '#60a5fa'
-    ctx.fillRect(layout.x + layout.width - 14, layout.y + layout.height / 2 - 34, 28, 68)
+    ctx.fillRect(layout.x + layout.width - h14, layout.y + layout.height / 2 - h34, h28, h68)
     ctx.fillStyle = '#34d399'
-    ctx.fillRect(layout.x + layout.width / 2 - 34, layout.y + layout.height - 14, 68, 28)
+    ctx.fillRect(layout.x + layout.width / 2 - h34, layout.y + layout.height - h14, h68, h28)
   }
   ctx.restore()
 }
@@ -287,8 +289,8 @@ function drawSnapGuides(
 ) {
   if (!snap.x && !snap.y) return
   ctx.save()
-  ctx.setLineDash([20, 12])
-  ctx.lineWidth = 4
+  ctx.setLineDash([pxS(canvas, 20), pxS(canvas, 12)])
+  ctx.lineWidth = pxS(canvas, 4)
   ctx.strokeStyle = 'rgba(96,165,250,.95)'
   if (snap.x) {
     ctx.beginPath()
