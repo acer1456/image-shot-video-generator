@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/image-shot-video-generator/sw.js', { scope: '/image-shot-video-generator/' })})}
