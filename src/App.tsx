@@ -15,8 +15,7 @@ import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, NarrationSegment, SubtitleStyle } from '@/types'
-import { DEFAULT_SUBTITLE_STYLE } from '@/types'
+import type { CameraPoint, CaptionData, DragState, NarrationTrack, SubtitleCue } from '@/types'
 import { normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
@@ -24,8 +23,8 @@ import {
 } from '@/lib/canvas'
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
-  getNarrationFullText,
-  getNarrationVisibleText,
+  getActiveSubtitleCue,
+  getSubtitleRenderText,
   scheduleNarrationAudio,
   stopNarrationAudio,
 } from '@/lib/narration'
@@ -50,9 +49,10 @@ function AppInner() {
   const [isMasterworkPickerOpen, setIsMasterworkPickerOpen] = useState(false)
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0)
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(false)
-  const [narrationSegments, setNarrationSegments] = useState<NarrationSegment[]>([])
+  const [narrationTrack, setNarrationTrack] = useState<NarrationTrack | null>(null)
+  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
+  const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
-  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE)
   const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
@@ -62,28 +62,30 @@ function AppInner() {
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
   const { loadingPainting, loadImageFromUrl, saveProject, loadProject } = useProjectIO(store, triggerRedraw, {
     narrationInputText,
-    narrationSegments,
-    subtitleStyle,
+    narrationTrack,
+    subtitleCues,
     setNarrationInputText,
-    setNarrationSegments,
-    setSubtitleStyle,
+    setNarrationTrack,
+    setSubtitleCues,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
     narrationInputText,
-    narrationSegments,
-    subtitleStyle,
+    narrationTrack,
+    subtitleCues,
     setNarrationInputText,
-    setNarrationSegments,
-    setSubtitleStyle,
+    setNarrationTrack,
+    setSubtitleCues,
     triggerRedraw,
   })
 
-  // Sync total duration whenever points change
+  // Sync total duration whenever points or narration timeline content changes
   useEffect(() => {
     const { totalDuration: td } = buildTimeline(store.points)
-    setTotalDuration(td)
-  }, [store.points])
+    const narrationEnd = narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
+    const subtitleEnd = subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
+    setTotalDuration(Math.max(td, narrationEnd, subtitleEnd))
+  }, [store.points, narrationTrack, subtitleCues])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -97,8 +99,8 @@ function AppInner() {
     store,
     getCanvas,
     triggerRedraw,
-    narrationSegments,
-    subtitleStyle,
+    narrationTrack,
+    subtitleCues,
   })
 
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
@@ -109,9 +111,10 @@ function AppInner() {
     const state = getTimelineStateAt(store.image, store.points, time)
     if (!state) return
     store.setActiveIndex(state.pointIndex)
-    const narrationText = getNarrationVisibleText(narrationSegments, time, ctx, subtitleStyle)
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, subtitleStyle)
-  }, [getCanvas, store, snapGuide, narrationSegments, subtitleStyle])
+    const cue = getActiveSubtitleCue(subtitleCues, time)
+    const narrationText = getSubtitleRenderText(cue)
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style)
+  }, [getCanvas, store, snapGuide, subtitleCues])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
     const { items } = buildTimeline(store.points)
@@ -149,7 +152,7 @@ function AppInner() {
     // Start from current cursor position (not always from 0)
     const startTime = currentTimeRef.current >= totalDuration ? 0 : currentTimeRef.current
     // Schedule narration audio from the start position
-    scheduleNarrationAudio(narrationSegments, startTime, audioCtxRef, narrationSourcesRef)
+    scheduleNarrationAudio(narrationTrack, startTime, audioCtxRef, narrationSourcesRef)
     const wallStart = performance.now()
     while (true) {
       if (previewCancelRef.current) break
@@ -175,7 +178,7 @@ function AppInner() {
     timelinePanelRef.current?.setTimeCursor(currentTimeRef.current)
     store.setIsPreviewing(false)
     triggerRedraw()
-  }, [store, totalDuration, drawTimelineTime, triggerRedraw, narrationSegments])
+  }, [store, totalDuration, drawTimelineTime, triggerRedraw, narrationTrack])
 
   // ---------- Point management helpers ----------
   const handlePointAdd = useCallback((x: number, y: number) => {
@@ -370,6 +373,16 @@ function AppInner() {
   // ---------- Render ----------
   const activePoint = store.points[store.activeIndex] || null
   const isDisabled = store.isRendering
+  const activeSubtitleCue = subtitleCues.find(cue => cue.id === activeSubtitleId) ?? null
+  const currentSubtitleCue = activeSubtitleCue ?? getActiveSubtitleCue(subtitleCues, currentTimeRef.current)
+  const updateActiveSubtitleStyle = (pos: { x: number; y: number }) => {
+    if (!currentSubtitleCue) return
+    setSubtitleCues(cues => cues.map(cue =>
+      cue.id === currentSubtitleCue.id
+        ? { ...cue, style: { ...cue.style, subtitlePosition: pos } }
+        : cue
+    ))
+  }
 
   const canvasEditorProps = {
     image: store.image,
@@ -403,12 +416,9 @@ function AppInner() {
     dragStateRef,
     currentTimeRef,
     forceRedraw,
-    narrationText: narrationSegments.length > 0
-      ? getNarrationFullText(narrationSegments, getPointFocusTime(store.activeIndex)) || undefined
-      : undefined,
-    subtitleStyle,
-    onSubtitlePositionChange: (pos: { x: number; y: number }) =>
-      setSubtitleStyle(s => ({ ...s, subtitlePosition: pos })),
+    narrationText: getSubtitleRenderText(currentSubtitleCue) || undefined,
+    subtitleStyle: currentSubtitleCue?.style,
+    onSubtitlePositionChange: updateActiveSubtitleStyle,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
   return (
@@ -437,12 +447,14 @@ function AppInner() {
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-3">
         <div className="flex flex-1 min-h-0 overflow-hidden gap-3">
           <NarrationSidebar
-            segments={narrationSegments}
-            onSegmentsChange={setNarrationSegments}
+            track={narrationTrack}
+            onTrackChange={setNarrationTrack}
+            subtitleCues={subtitleCues}
+            onSubtitleCuesChange={setSubtitleCues}
+            activeSubtitleId={activeSubtitleId}
+            onActiveSubtitleIdChange={setActiveSubtitleId}
             inputText={narrationInputText}
             onInputTextChange={setNarrationInputText}
-            subtitleStyle={subtitleStyle}
-            onSubtitleStyleChange={setSubtitleStyle}
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />
@@ -554,8 +566,11 @@ function AppInner() {
             onPlay={previewPath}
             onPause={() => { previewCancelRef.current = true; store.setIsPreviewing(false); stopNarrationAudio(narrationSourcesRef) }}
             onPointSelect={selectPointAndSyncTimeline}
-            narrationSegments={narrationSegments}
-            onNarrationSegmentsChange={setNarrationSegments}
+            narrationTrack={narrationTrack}
+            onNarrationTrackChange={setNarrationTrack}
+            subtitleCues={subtitleCues}
+            onSubtitleCuesChange={setSubtitleCues}
+            onSubtitleSelect={setActiveSubtitleId}
           />
         </div>
       </div>

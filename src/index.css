@@ -103,6 +103,23 @@
 .timeline-editor-action {
   background-color: transparent !important;
 }
+.timeline-editor-action .timeline-editor-action-left-stretch,
+.timeline-editor-action .timeline-editor-action-right-stretch {
+  width: 18px !important;
+  z-index: 4;
+}
+.timeline-editor-action .timeline-editor-action-left-stretch {
+  left: -4px !important;
+}
+.timeline-editor-action .timeline-editor-action-right-stretch {
+  right: -4px !important;
+}
+.timeline-editor-action .timeline-editor-action-left-stretch:hover:after {
+  border-left-color: rgba(255,255,255,.45) !important;
+}
+.timeline-editor-action .timeline-editor-action-right-stretch:hover:after {
+  border-right-color: rgba(255,255,255,.45) !important;
+}
 .timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb {
   background: hsl(var(--border)) !important;
 }

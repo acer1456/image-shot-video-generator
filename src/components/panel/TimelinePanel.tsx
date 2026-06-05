@@ -2,15 +2,16 @@ import { useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandl
 import { Timeline } from '@xzdarcy/react-timeline-editor'
 import type { TimelineState } from '@xzdarcy/react-timeline-editor'
 import type { TimelineRow, TimelineEffect, TimelineAction } from '@xzdarcy/timeline-engine'
-import type { CameraPoint, NarrationSegment } from '@/types'
+import type { CameraPoint, NarrationTrack, SubtitleCue } from '@/types'
+import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { formatTime } from '@/lib/utils'
 import { buildTimeline } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
-import { Play, Pause, ChevronsUpDown, ChevronsDownUp } from 'lucide-react'
+import { Play, Pause, ChevronsUpDown, ChevronsDownUp, Trash2 } from 'lucide-react'
 
 // Extended action type that carries our app-specific metadata
 type RichAction = TimelineAction & {
-  data?: { label: string; pointIndex: number; type: string }
+  data?: { label: string; pointIndex: number; type: string; trackId?: string; cueId?: string }
 }
 
 /** Imperative handle exposed to parent for direct cursor control (bypasses React state) */
@@ -25,19 +26,22 @@ const EFFECTS: Record<string, TimelineEffect> = {
   caption:   { id: 'caption',   name: '旁白' },
   music:     { id: 'music',     name: '音樂' },
   narration: { id: 'narration', name: '旁白' },
+  subtitle:  { id: 'subtitle',  name: '字幕' },
 }
 
 const ROW_CAMERA    = 'row-camera'
 const ROW_NARRATION = 'row-narration'
+const ROW_SUBTITLE  = 'row-subtitle'
 const ROW_MUSIC     = 'row-music'
 
 const ROW_LABELS: Record<string, string> = {
   [ROW_CAMERA]:    '鏡頭',
   [ROW_NARRATION]: '旁白',
+  [ROW_SUBTITLE]:  '字幕',
   [ROW_MUSIC]:     '音樂',
 }
 
-const NUM_ROWS = 3
+const NUM_ROWS = 4
 
 /** Pixels rendered for 1-second scale mark */
 const SCALE_WIDTH  = 80
@@ -53,6 +57,7 @@ const SCALE_HEIGHT = 28
 function getActionColors(effectId: string, rowId: string): { bg: string; fg: string } {
   if (rowId === ROW_MUSIC)     return { bg: 'rgba(168,85,247,.82)',  fg: '#ffffff' }
   if (rowId === ROW_NARRATION) return { bg: 'rgba(251,146,60,.88)',  fg: '#ffffff' }
+  if (rowId === ROW_SUBTITLE)  return { bg: 'rgba(14,165,233,.86)',  fg: '#ffffff' }
   switch (effectId) {
     case 'move':    return { bg: 'rgba(37,99,235,.85)',  fg: '#ffffff' }
     case 'hold':    return { bg: 'rgba(16,185,129,.82)', fg: '#ffffff' }
@@ -75,15 +80,18 @@ interface TimelinePanelProps {
   onMoveDurationChange:        (pointIndex: number, duration: number) => void
   onPlay:                      () => void
   onPause:                     () => void
-  narrationSegments?:          NarrationSegment[]
-  onNarrationSegmentsChange?:  (segs: NarrationSegment[]) => void
+  narrationTrack?:             NarrationTrack | null
+  onNarrationTrackChange?:     (track: NarrationTrack | null) => void
+  subtitleCues?:               SubtitleCue[]
+  onSubtitleCuesChange?:       (cues: SubtitleCue[]) => void
+  onSubtitleSelect?:           (id: string) => void
 }
 
 export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function TimelinePanel({
   points, currentTime, totalDuration, isPreviewing, isDisabled,
   expanded = false, onToggleExpanded,
   onTimeChange, onPointSelect, onHoldDurationChange, onMoveDurationChange, onPlay, onPause,
-  narrationSegments, onNarrationSegmentsChange,
+  narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange, onSubtitleSelect,
 }, ref) {
   const { resolvedTheme } = useTheme()
   const isDark      = resolvedTheme === 'dark'
@@ -91,7 +99,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const rootRef     = useRef<HTMLDivElement>(null)
 
   // ── Row order + local music state ────────────────────────────────────────
-  const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_NARRATION, ROW_MUSIC])
+  const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_NARRATION, ROW_SUBTITLE, ROW_MUSIC])
   const [localMusic, setLocalMusic] = useState<TimelineAction[]>([])
   // Incrementing forces editorData useMemo to recompute → camera/narration blocks snap back
   const [snapKey, setSnapKey]       = useState(0)
@@ -160,18 +168,30 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     [items],
   )
 
-  // Narration row: derived from narrationSegments prop (movable + resizable)
-  const narrationActions = useMemo<TimelineAction[]>(() =>
-    (narrationSegments ?? []).map((seg, i) => ({
-      id:       `narration-${seg.id}`,
-      start:    seg.startTime,
-      end:      seg.startTime + seg.duration,
+  const narrationActions = useMemo<TimelineAction[]>(() => {
+    if (!narrationTrack || narrationTrack.duration <= 0) return []
+    return [{
+      id:       `narration-${narrationTrack.id}`,
+      start:    narrationTrack.startTime,
+      end:      narrationTrack.startTime + narrationTrack.duration,
       effectId: 'narration',
+      movable:  false,
+      flexible: false,
+      data: { label: '旁白音訊', pointIndex: -1, type: 'narration', trackId: narrationTrack.id },
+    } as RichAction as TimelineAction]
+  }, [narrationTrack])
+
+  const subtitleActions = useMemo<TimelineAction[]>(() =>
+    (subtitleCues ?? []).map((cue, i) => ({
+      id:       `subtitle-${cue.id}`,
+      start:    cue.startTime,
+      end:      cue.startTime + cue.duration,
+      effectId: 'subtitle',
       movable:  true,
       flexible: true,
-      data: { label: seg.text.slice(0, 24), pointIndex: i, type: 'narration', segId: seg.id },
+      data: { label: cue.text.slice(0, 24) || `字幕 ${i + 1}`, pointIndex: i, type: 'subtitle', cueId: cue.id },
     } as RichAction as TimelineAction)),
-    [narrationSegments],
+    [subtitleCues],
   )
 
   // Full editorData: row order drives display sequence.
@@ -181,11 +201,12 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     const rowMap: Record<string, TimelineRow> = {
       [ROW_CAMERA]:    { id: ROW_CAMERA,    actions: cameraActions },
       [ROW_NARRATION]: { id: ROW_NARRATION, actions: narrationActions },
+      [ROW_SUBTITLE]:  { id: ROW_SUBTITLE,  actions: subtitleActions },
       [ROW_MUSIC]:     { id: ROW_MUSIC,     actions: localMusic },
     }
     void snapKey
     return rowOrder.map(id => rowMap[id])
-  }, [cameraActions, narrationActions, localMusic, rowOrder, snapKey])
+  }, [cameraActions, narrationActions, subtitleActions, localMusic, rowOrder, snapKey])
 
   // ── Scale count: ensure enough tick marks to cover all content ──────────
   const scaleCount = Math.max(20, Math.ceil(totalDuration) + 4)
@@ -212,23 +233,17 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     [onTimeChange],
   )
 
-  // Camera row: block left-edge resize; real-time duration update on right-edge drag
+  // Camera row: block left-edge resize. Commit duration at resize end to keep drag smooth.
   const handleResizing = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }): boolean | void => {
-      const { action, row, start, end, dir } = params
+      const { row, dir } = params
       if (row.id === ROW_CAMERA) {
         if (dir === 'left') return false
-        // Real-time update: subsequent blocks shift immediately as user drags
-        const rich = action as RichAction
-        if (rich.data?.pointIndex !== undefined) {
-          const dur = Math.max(0.1, end - start)
-          if (action.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, dur)
-          else if (action.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, dur)
-        }
       }
+      if (row.id === ROW_NARRATION) return false
       return undefined
     },
-    [onHoldDurationChange, onMoveDurationChange],
+    [],
   )
 
   const handleResizeEnd = useCallback(
@@ -240,12 +255,12 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         const newDuration = Math.max(0.1, end - start)
         if (rich.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, newDuration)
         else if (rich.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, newDuration)
-      } else if (row.id === ROW_NARRATION && onNarrationSegmentsChange && narrationSegments) {
-        const segId = (rich.data as Record<string, unknown>)?.segId as string | undefined
-        if (segId) {
+      } else if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
+        const cueId = rich.data?.cueId
+        if (cueId) {
           const newDuration = Math.max(0.1, end - start)
-          onNarrationSegmentsChange(narrationSegments.map(s =>
-            s.id === segId ? { ...s, startTime: start, duration: newDuration } : s
+          onSubtitleCuesChange(subtitleCues.map(cue =>
+            cue.id === cueId ? { ...cue, startTime: start, duration: newDuration } : cue
           ))
         }
       } else if (row.id === ROW_MUSIC) {
@@ -254,19 +269,19 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         setSnapKey(k => k + 1)
       }
     },
-    [onHoldDurationChange, onMoveDurationChange, narrationSegments, onNarrationSegmentsChange],
+    [onHoldDurationChange, onMoveDurationChange, subtitleCues, onSubtitleCuesChange],
   )
 
   const handleMoveEnd = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }) => {
       const { action, row, start, end } = params
       const rich = action as RichAction
-      if (row.id === ROW_NARRATION && onNarrationSegmentsChange && narrationSegments) {
-        const segId = (rich.data as Record<string, unknown>)?.segId as string | undefined
-        if (segId) {
+      if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
+        const cueId = rich.data?.cueId
+        if (cueId) {
           const duration = end - start
-          onNarrationSegmentsChange(narrationSegments.map(s =>
-            s.id === segId ? { ...s, startTime: start, duration: Math.max(0.1, duration) } : s
+          onSubtitleCuesChange(subtitleCues.map(cue =>
+            cue.id === cueId ? { ...cue, startTime: start, duration: Math.max(0.1, duration) } : cue
           ))
         }
       } else if (row.id === ROW_MUSIC) {
@@ -276,7 +291,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         setSnapKey(k => k + 1)
       }
     },
-    [narrationSegments, onNarrationSegmentsChange],
+    [subtitleCues, onSubtitleCuesChange],
   )
 
   const handleRowDragEnd = useCallback(
@@ -291,40 +306,88 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       const rich = params.action as RichAction
       if (params.row.id === ROW_CAMERA && rich.data?.pointIndex !== undefined) {
         onPointSelect(rich.data.pointIndex)
+      } else if (params.row.id === ROW_SUBTITLE && rich.data?.cueId) {
+        onSubtitleSelect?.(rich.data.cueId)
       }
     },
-    [onPointSelect],
+    [onPointSelect, onSubtitleSelect],
   )
 
   // Double-click music row → add a 4-second music block at cursor position
   const handleDoubleClickRow = useCallback(
     (_e: React.MouseEvent, params: { row: TimelineRow; time: number }) => {
-      if (params.row.id !== ROW_MUSIC) return
-      const start      = Math.max(0, params.time - 2)
-      const end        = start + 4
-      const newAction: TimelineAction = {
-        id:       `music-${Date.now()}`,
-        start,
-        end,
-        effectId: 'music',
-        movable:  true,
-        flexible: true,
-        data:     { label: '音樂', pointIndex: -1, type: 'music' },
-      } as RichAction as TimelineAction
-      setLocalMusic(prev => [...prev, newAction])
-    },
-    [],
-  )
+      if (params.row.id === ROW_SUBTITLE && onSubtitleCuesChange) {
+        if (!window.confirm('確定要新增一個字幕嗎？')) return
+        const id = crypto.randomUUID()
+        const start = Math.max(0, params.time)
+        const cue: SubtitleCue = {
+          id,
+          narrationId: narrationTrack?.id ?? '',
+          text: '新字幕',
+          translation: '',
+          startTime: start,
+          duration: 2,
+          style: {
+            ...DEFAULT_SUBTITLE_STYLE,
+            subtitlePosition: { ...DEFAULT_SUBTITLE_STYLE.subtitlePosition },
+          },
+          wordStartIndex: 0,
+          wordEndIndex: 0,
+        }
+        onSubtitleCuesChange([...(subtitleCues ?? []), cue])
+        onSubtitleSelect?.(id)
+        return
+      }
 
-  // Double-click music action → remove it
-  const handleDoubleClickAction = useCallback(
-    (_e: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow }) => {
       if (params.row.id === ROW_MUSIC) {
-        setLocalMusic(prev => prev.filter(a => a.id !== params.action.id))
+        const start      = Math.max(0, params.time - 2)
+        const end        = start + 4
+        const newAction: TimelineAction = {
+          id:       `music-${Date.now()}`,
+          start,
+          end,
+          effectId: 'music',
+          movable:  true,
+          flexible: true,
+          data:     { label: '音樂', pointIndex: -1, type: 'music' },
+        } as RichAction as TimelineAction
+        setLocalMusic(prev => [...prev, newAction])
       }
     },
-    [],
+    [narrationTrack, onSubtitleCuesChange, onSubtitleSelect, subtitleCues],
   )
+
+  // Double-click music/subtitle action → remove it
+  const handleDoubleClickAction = useCallback(
+    (event: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow }) => {
+      event.stopPropagation()
+      if (params.row.id === ROW_MUSIC) {
+        setLocalMusic(prev => prev.filter(a => a.id !== params.action.id))
+      } else if (params.row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
+        const rich = params.action as RichAction
+        const cueId = rich.data?.cueId ?? String(params.action.id).replace(/^subtitle-/, '')
+        if (cueId) {
+          if (!window.confirm('確定要刪除這個字幕嗎？')) return
+          onSubtitleCuesChange(subtitleCues.filter(cue => cue.id !== cueId))
+        }
+      }
+    },
+    [onSubtitleCuesChange, subtitleCues],
+  )
+
+  const handleClearNarrationRow = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (!narrationTrack || !onNarrationTrackChange) return
+    if (!window.confirm('確定要刪除旁白音訊嗎？')) return
+    onNarrationTrackChange(null)
+  }, [narrationTrack, onNarrationTrackChange])
+
+  const handleClearSubtitleRow = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (!subtitleCues?.length || !onSubtitleCuesChange) return
+    if (!window.confirm('確定要刪除所有字幕嗎？')) return
+    onSubtitleCuesChange([])
+  }, [onSubtitleCuesChange, subtitleCues])
 
   // ── Theme-aware colours ────────────────────────────────────────────────
   const labelBg    = isDark ? 'hsl(217.2 32.6% 8%)'       : 'hsl(0 0% 100%)'
@@ -332,7 +395,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const borderCol  = isDark ? 'hsl(217.2 32.6% 17.5%)'    : 'hsl(214.3 31.8% 91.4%)'
   const scaleFg    = isDark ? 'rgba(255,255,255,.40)'      : 'rgba(0,0,0,.38)'
 
-  const hasContent = items.length > 0 || localMusic.length > 0 || (narrationSegments?.length ?? 0) > 0
+  const hasContent = items.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-2 select-none" style={{ margin: '-10px' }}>
@@ -384,7 +447,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               {rowOrder.map((id, i) => (
                 <div
                   key={id}
-                  className="absolute flex items-center justify-center text-[11px] font-medium"
+                  className="absolute flex items-center justify-center gap-1 text-[11px] font-medium"
                   style={{
                     top:          i * rowH,
                     left:         0,
@@ -396,7 +459,25 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                     borderBottom: i < NUM_ROWS - 1 ? `1px solid ${borderCol}` : 'none',
                   }}
                 >
-                  {ROW_LABELS[id]}
+                  <span>{ROW_LABELS[id]}</span>
+                  {id === ROW_NARRATION && narrationTrack && onNarrationTrackChange && (
+                    <button
+                      className="pointer-events-auto h-5 w-5 rounded flex items-center justify-center hover:bg-muted transition-colors"
+                      title="刪除旁白音訊"
+                      onClick={handleClearNarrationRow}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                  {id === ROW_SUBTITLE && (subtitleCues?.length ?? 0) > 0 && onSubtitleCuesChange && (
+                    <button
+                      className="pointer-events-auto h-5 w-5 rounded flex items-center justify-center hover:bg-muted transition-colors"
+                      title="刪除所有字幕"
+                      onClick={handleClearSubtitleRow}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -408,7 +489,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               editorData={editorData}
               effects={EFFECTS}
               scale={1}
-              scaleSplitCount={4}
+              scaleSplitCount={10}
               scaleWidth={SCALE_WIDTH}
               startLeft={START_LEFT}
               rowHeight={rowH}
@@ -440,7 +521,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                 const { bg, fg } = getActionColors(action.effectId, row.id)
                 return (
                   <div
-                    title={row.id === ROW_MUSIC ? '雙擊刪除' : undefined}
+                    title={row.id === ROW_MUSIC || row.id === ROW_SUBTITLE ? '雙擊刪除' : undefined}
                     style={{
                       width: '100%', height: '100%',
                       borderRadius: 3,
@@ -477,6 +558,21 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                 }}
               >
                 雙擊新增音樂片段
+              </div>
+            )}
+
+            {(subtitleCues?.length ?? 0) === 0 && (
+              <div
+                className="absolute pointer-events-none flex items-center text-[10px]"
+                style={{
+                  top:     SCALE_HEIGHT + rowOrder.indexOf(ROW_SUBTITLE) * rowH,
+                  left:    START_LEFT + 8,
+                  height:  rowH,
+                  color:   labelColor,
+                  opacity: 0.5,
+                }}
+              >
+                雙擊新增字幕
               </div>
             )}
           </>

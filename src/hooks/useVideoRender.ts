@@ -1,184 +1,26 @@
 import { useCallback, useState } from 'react'
+import { Muxer, ArrayBufferTarget } from 'webm-muxer'
 import type { AppStore } from '@/hooks/useAppStore'
 import { buildTimeline, drawCamera as doDrawCamera, getTimelineStateAt } from '@/lib/canvas'
 import { OUTPUT_W, OUTPUT_H, sanitizeFileName, getTodayString, wait } from '@/lib/utils'
-import { convertPointsCaptions, type ChineseConversion } from '@/lib/chinese'
-import type { NarrationSegment, SubtitleStyle } from '@/types'
-import { getNarrationVisibleText } from '@/lib/narration'
+import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from '@/lib/chinese'
+import type { NarrationTrack, SubtitleCue } from '@/types'
+import { getActiveSubtitleCue, getSubtitleRenderText } from '@/lib/narration'
 
 export type VideoRenderMethod = 'mediaRecorder' | 'webCodecs'
 
 const RENDER_FPS = 30
 const FRAME_MS = Math.ceil(1000 / RENDER_FPS)
 const FRAME_DURATION_US = Math.round(1_000_000 / RENDER_FPS)
-const WEBM_TIMECODE_SCALE = 1_000_000 // 1 ms
-const WEBM_CLUSTER_MAX_MS = 5_000
 const WEB_CODECS_MAX_QUEUE_SIZE = 2
+const OPUS_FRAME_MS = 20
 
 interface UseVideoRenderOptions {
   store: AppStore
   getCanvas: () => HTMLCanvasElement | null
   triggerRedraw: () => void
-  narrationSegments: NarrationSegment[]
-  subtitleStyle: SubtitleStyle
-}
-
-interface EncodedFrame {
-  data: Uint8Array
-  timestampUs: number
-  keyFrame: boolean
-}
-
-function bytes(...values: number[]) {
-  return new Uint8Array(values)
-}
-
-function concatBytes(parts: Uint8Array[]) {
-  const total = parts.reduce((sum, part) => sum + part.length, 0)
-  const out = new Uint8Array(total)
-  let offset = 0
-  for (const part of parts) {
-    out.set(part, offset)
-    offset += part.length
-  }
-  return out
-}
-
-function textBytes(text: string) {
-  return new TextEncoder().encode(text)
-}
-
-function uintBytes(value: number) {
-  if (value === 0) return bytes(0)
-  const out: number[] = []
-  let next = value
-  while (next > 0) {
-    out.unshift(next & 0xff)
-    next = Math.floor(next / 256)
-  }
-  return new Uint8Array(out)
-}
-
-function float64Bytes(value: number) {
-  const out = new Uint8Array(8)
-  new DataView(out.buffer).setFloat64(0, value, false)
-  return out
-}
-
-function int16Bytes(value: number) {
-  const out = new Uint8Array(2)
-  new DataView(out.buffer).setInt16(0, value, false)
-  return out
-}
-
-function vintSizeBytes(size: number) {
-  for (let length = 1; length <= 8; length++) {
-    const max = Math.pow(2, 7 * length) - 1
-    if (size <= max) {
-      const out = new Uint8Array(length)
-      let value = size
-      for (let i = length - 1; i >= 0; i--) {
-        out[i] = value & 0xff
-        value = Math.floor(value / 256)
-      }
-      out[0] |= 1 << (8 - length)
-      return out
-    }
-  }
-  throw new Error('WebM chunk is too large')
-}
-
-function ebml(id: Uint8Array, data: Uint8Array | string | number) {
-  const payload = typeof data === 'string'
-    ? textBytes(data)
-    : typeof data === 'number'
-      ? uintBytes(data)
-      : data
-  return concatBytes([id, vintSizeBytes(payload.length), payload])
-}
-
-function ebmlPartHeader(id: Uint8Array, payloadSize: number) {
-  return concatBytes([id, vintSizeBytes(payloadSize)])
-}
-
-function ebmlParts(id: Uint8Array, payloadParts: Uint8Array[]) {
-  const payloadSize = payloadParts.reduce((sum, part) => sum + part.length, 0)
-  return [ebmlPartHeader(id, payloadSize), ...payloadParts]
-}
-
-function simpleBlockParts(frame: EncodedFrame, clusterTimeMs: number) {
-  const relativeTime = Math.round(frame.timestampUs / 1000) - clusterTimeMs
-  const blockHeader = concatBytes([
-    bytes(0x81),
-    int16Bytes(relativeTime),
-    bytes(frame.keyFrame ? 0x80 : 0x00),
-  ])
-  return ebmlParts(
-    bytes(0xa3),
-    [blockHeader, frame.data]
-  )
-}
-
-function webmClusterParts(frames: EncodedFrame[], clusterTimeMs: number) {
-  return ebmlParts(
-    bytes(0x1f, 0x43, 0xb6, 0x75),
-    [
-      ebml(bytes(0xe7), clusterTimeMs),
-      ...frames.flatMap(frame => simpleBlockParts(frame, clusterTimeMs)),
-    ]
-  )
-}
-
-function muxVp8Webm(frames: EncodedFrame[], durationSeconds: number) {
-  const header = ebml(bytes(0x1a, 0x45, 0xdf, 0xa3), concatBytes([
-    ebml(bytes(0x42, 0x86), 1),
-    ebml(bytes(0x42, 0xf7), 1),
-    ebml(bytes(0x42, 0xf2), 4),
-    ebml(bytes(0x42, 0xf3), 8),
-    ebml(bytes(0x42, 0x82), 'webm'),
-    ebml(bytes(0x42, 0x87), 2),
-    ebml(bytes(0x42, 0x85), 2),
-  ]))
-
-  const info = ebml(bytes(0x15, 0x49, 0xa9, 0x66), concatBytes([
-    ebml(bytes(0x2a, 0xd7, 0xb1), WEBM_TIMECODE_SCALE),
-    ebml(bytes(0x4d, 0x80), 'artful-learning'),
-    ebml(bytes(0x57, 0x41), 'artful-learning'),
-    ebml(bytes(0x44, 0x89), float64Bytes(durationSeconds * 1000)),
-  ]))
-
-  const tracks = ebml(bytes(0x16, 0x54, 0xae, 0x6b), ebml(bytes(0xae), concatBytes([
-    ebml(bytes(0xd7), 1),
-    ebml(bytes(0x73, 0xc5), 1),
-    ebml(bytes(0x83), 1),
-    ebml(bytes(0x86), 'V_VP8'),
-    ebml(bytes(0xe0), concatBytes([
-      ebml(bytes(0xb0), OUTPUT_W),
-      ebml(bytes(0xba), OUTPUT_H),
-    ])),
-  ])))
-
-  const clusters: Uint8Array[] = []
-  let clusterFrames: EncodedFrame[] = []
-  let clusterTimeMs = 0
-  for (const frame of frames) {
-    const frameTimeMs = Math.round(frame.timestampUs / 1000)
-    if (!clusterFrames.length) {
-      clusterTimeMs = frameTimeMs
-    } else if (frameTimeMs - clusterTimeMs > WEBM_CLUSTER_MAX_MS) {
-      clusters.push(...webmClusterParts(clusterFrames, clusterTimeMs))
-      clusterFrames = []
-      clusterTimeMs = frameTimeMs
-    }
-    clusterFrames.push(frame)
-  }
-  if (clusterFrames.length) clusters.push(...webmClusterParts(clusterFrames, clusterTimeMs))
-
-  const segmentParts = [info, tracks, ...clusters]
-  return new Blob(
-    [header, ebmlPartHeader(bytes(0x18, 0x53, 0x80, 0x67), segmentParts.reduce((sum, part) => sum + part.length, 0)), ...segmentParts],
-    { type: 'video/webm;codecs=vp8' }
-  )
+  narrationTrack: NarrationTrack | null
+  subtitleCues: SubtitleCue[]
 }
 
 function getBestMediaRecorderMimeType() {
@@ -207,12 +49,36 @@ function createProgressReporter(setRenderProgress: (progress: number) => void) {
   }
 }
 
+function hasNarrationAudio(track: NarrationTrack | null) {
+  return !!track?.audioData && !!track.samplingRate && track.duration > 0
+}
+
+function getNarrationFrameSample(track: NarrationTrack, sampleIndex: number) {
+  const startFrame = Math.max(0, Math.round(track.startTime * track.samplingRate!))
+  const sourceIndex = sampleIndex - startFrame
+  if (sourceIndex < 0 || sourceIndex >= track.audioData!.length) return 0
+  return track.audioData![sourceIndex]
+}
+
+async function createNarrationAudioTrack(track: NarrationTrack | null) {
+  if (!hasNarrationAudio(track)) return null
+  const audioCtx = new AudioContext({ sampleRate: track!.samplingRate })
+  await audioCtx.resume()
+  const destination = audioCtx.createMediaStreamDestination()
+  const buffer = audioCtx.createBuffer(1, track!.audioData!.length, track!.samplingRate!)
+  buffer.copyToChannel(track!.audioData!, 0)
+  const source = audioCtx.createBufferSource()
+  source.buffer = buffer
+  source.connect(destination)
+  return { audioCtx, destination, source }
+}
+
 export function useVideoRender({
   store,
   getCanvas,
   triggerRedraw,
-  narrationSegments,
-  subtitleStyle,
+  narrationTrack,
+  subtitleCues,
 }: UseVideoRenderOptions) {
   const [renderProgress, setRenderProgress] = useState(0)
 
@@ -227,8 +93,14 @@ export function useVideoRender({
       const renderPoints = captionConversion === 'original'
         ? store.points
         : await convertPointsCaptions(store.points, captionConversion)
+      const renderSubtitleCues = captionConversion === 'original'
+        ? subtitleCues
+        : await convertSubtitleCues(subtitleCues, captionConversion)
       const { totalDuration: td } = buildTimeline(renderPoints)
-      const totalFrames = Math.ceil(td * RENDER_FPS) + 1
+      const narrationEnd = narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
+      const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
+      const renderDuration = Math.max(td, narrationEnd, subtitleEnd)
+      const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
 
       // Dedicated offscreen canvas — completely isolated from the editor canvas.
       // Prevents React re-renders / drawBase() effects from interfering with the
@@ -249,21 +121,22 @@ export function useVideoRender({
       const drawFrame = (t: number) => {
         const state = getTimelineStateAt(store.image!, renderPoints, t)
         if (!state) return
-        const narText = getNarrationVisibleText(narrationSegments, t, offCtx, subtitleStyle) || undefined
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, subtitleStyle)
+        const cue = getActiveSubtitleCue(renderSubtitleCues, t)
+        const narText = getSubtitleRenderText(cue) || undefined
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
         if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, subtitleStyle)
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
         }
       }
 
       setRenderProgress(0)
-      const { blob, mimeType } = method === 'webCodecs'
-        ? await renderWithWebCodecs(off, drawFrame, td, totalFrames, setRenderProgress)
-        : await renderWithMediaRecorder(off, drawFrame, td, totalFrames, setRenderProgress)
+      const { blob, mimeType } = method === 'mediaRecorder'
+        ? await renderWithMediaRecorder(off, drawFrame, renderDuration, totalFrames, setRenderProgress, narrationTrack)
+        : await renderWithWebCodecs(off, drawFrame, renderDuration, totalFrames, setRenderProgress, narrationTrack)
       if (store.lastVideoUrl) URL.revokeObjectURL(store.lastVideoUrl)
       const url = URL.createObjectURL(blob)
       store.setLastVideoUrl(url)
-      const ext = method === 'webCodecs' ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm'
+      const ext = mimeType.includes('mp4') ? 'mp4' : 'webm'
       const suffix = captionConversion === 'tw' ? '-繁中' : captionConversion === 'cn' ? '-简中' : ''
       const a = document.createElement('a')
       a.href = url
@@ -276,7 +149,7 @@ export function useVideoRender({
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, triggerRedraw, narrationSegments, subtitleStyle])
+  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues])
 
   return { renderVideo, renderProgress }
 }
@@ -287,6 +160,7 @@ async function renderWithMediaRecorder(
   totalDuration: number,
   totalFrames: number,
   setRenderProgress: (progress: number) => void,
+  narrationTrack: NarrationTrack | null,
 ) {
   // captureStream(0) = manual frame mode: frames are only captured when
   // requestFrame() is explicitly called. This is necessary for offscreen
@@ -294,6 +168,12 @@ async function renderWithMediaRecorder(
   // captureStream(N) with a non-zero rate never actually samples any pixels,
   // causing the stream to produce no data and recorder.onstop to hang forever.
   const stream = canvas.captureStream(0)
+  const narrationAudio = await createNarrationAudioTrack(narrationTrack)
+  if (narrationAudio) {
+    for (const track of narrationAudio.destination.stream.getAudioTracks()) {
+      stream.addTrack(track)
+    }
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const captureTrack = stream.getVideoTracks()[0] as any
@@ -308,6 +188,10 @@ async function renderWithMediaRecorder(
       recorder.onerror = (e: Event) => reject(new Error('MediaRecorder: ' + ((e as any).error?.message ?? 'unknown error')))
     })
     recorder.start()
+    if (narrationAudio) {
+      const delay = Math.max(0, narrationTrack!.startTime)
+      narrationAudio.source.start(narrationAudio.audioCtx.currentTime + delay)
+    }
 
     // Fixed-step render: t = frame / FPS — each frame is explicitly pushed to the
     // stream via requestFrame(), ensuring reliable capture for offscreen canvases.
@@ -328,6 +212,11 @@ async function renderWithMediaRecorder(
       mimeType,
     }
   } finally {
+    if (narrationAudio) {
+      try { narrationAudio.source.stop() } catch { /* already stopped */ }
+      narrationAudio.destination.stream.getTracks().forEach(track => track.stop())
+      await narrationAudio.audioCtx.close().catch(() => undefined)
+    }
     // Explicitly stop the track so the canvas is no longer held by this stream.
     stream.getTracks().forEach(track => track.stop())
   }
@@ -339,31 +228,52 @@ async function renderWithWebCodecs(
   totalDuration: number,
   totalFrames: number,
   setRenderProgress: (progress: number) => void,
+  narrationTrack: NarrationTrack | null,
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const VideoEncoderCtor = (globalThis as any).VideoEncoder
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const VideoFrameCtor = (globalThis as any).VideoFrame
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const AudioEncoderCtor = (globalThis as any).AudioEncoder
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const AudioDataCtor = (globalThis as any).AudioData
   if (!VideoEncoderCtor || !VideoFrameCtor) {
     throw new Error('此瀏覽器不支援 WebCodecs VideoEncoder。')
   }
+  if (hasNarrationAudio(narrationTrack) && (!AudioEncoderCtor || !AudioDataCtor)) {
+    throw new Error('此瀏覽器不支援 WebCodecs AudioEncoder，請改用 MediaRecorder 輸出含旁白影片。')
+  }
 
-  const chunks: EncodedFrame[] = []
+  const target = new ArrayBufferTarget()
+  const muxer = new Muxer({
+    target,
+    video: {
+      codec: 'V_VP8',
+      width: OUTPUT_W,
+      height: OUTPUT_H,
+      frameRate: RENDER_FPS,
+    },
+    ...(hasNarrationAudio(narrationTrack)
+      ? {
+        audio: {
+          codec: 'A_OPUS',
+          numberOfChannels: 1,
+          sampleRate: narrationTrack!.samplingRate!,
+        },
+      }
+      : {}),
+  })
   const errors: Error[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let encoder: any | null = new VideoEncoderCtor({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    output: (chunk: any) => {
-      const data = new Uint8Array(chunk.byteLength)
-      chunk.copyTo(data)
-      chunks.push({
-        data,
-        timestampUs: Number(chunk.timestamp ?? 0),
-        keyFrame: chunk.type === 'key',
-      })
-    },
+    output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
     error: (error: Error) => errors.push(error),
   })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let audioEncoder: any | null = null
+  let audioEncodeController: { encodeUntil: (timeSeconds: number) => Promise<void> } | null = null
   const reportProgress = createProgressReporter(setRenderProgress)
 
   const config = {
@@ -378,17 +288,38 @@ async function renderWithWebCodecs(
     const support = await VideoEncoderCtor.isConfigSupported(config)
     if (!support.supported) throw new Error('此瀏覽器不支援 VP8 WebCodecs 編碼。')
   }
+  if (hasNarrationAudio(narrationTrack)) {
+    const audioConfig = {
+      codec: 'opus',
+      sampleRate: narrationTrack!.samplingRate!,
+      numberOfChannels: 1,
+      bitrate: 96_000,
+    }
+    if (typeof AudioEncoderCtor.isConfigSupported === 'function') {
+      const support = await AudioEncoderCtor.isConfigSupported(audioConfig)
+      if (!support.supported) throw new Error('此瀏覽器不支援 Opus WebCodecs 音訊編碼，請改用 MediaRecorder。')
+    }
+    audioEncoder = new AudioEncoderCtor({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      output: (chunk: any, meta: any) => muxer.addAudioChunk(chunk, meta),
+      error: (error: Error) => errors.push(error),
+    })
+    audioEncoder.configure(audioConfig)
+    audioEncodeController = createNarrationAudioEncodeController(audioEncoder, AudioDataCtor, narrationTrack!, totalDuration)
+  }
   try {
     encoder.configure(config)
 
     for (let frame = 0; frame < totalFrames; frame++) {
-      drawFrame(Math.min(frame / RENDER_FPS, totalDuration))
+      const time = Math.min(frame / RENDER_FPS, totalDuration)
+      drawFrame(time)
       const videoFrame = new VideoFrameCtor(canvas, {
         timestamp: frame * FRAME_DURATION_US,
         duration: FRAME_DURATION_US,
       })
       encoder.encode(videoFrame, { keyFrame: frame % (RENDER_FPS * 2) === 0 })
       videoFrame.close()
+      if (audioEncodeController) await audioEncodeController.encodeUntil(time + 1 / RENDER_FPS)
       await waitForEncoderQueue(encoder, WEB_CODECS_MAX_QUEUE_SIZE)
       reportProgress(frame, totalFrames)
       if (frame % 10 === 0) await wait(0)
@@ -396,15 +327,64 @@ async function renderWithWebCodecs(
     }
 
     await encoder.flush()
+    if (audioEncoder && audioEncodeController) {
+      await audioEncodeController.encodeUntil(totalDuration)
+      await audioEncoder.flush()
+    }
     if (errors.length) throw errors[0]
   } finally {
     encoder?.close()
     encoder = null
+    audioEncoder?.close()
+    audioEncoder = null
   }
 
+  muxer.finalize()
+  const mimeType = hasNarrationAudio(narrationTrack) ? 'video/webm;codecs=vp8,opus' : 'video/webm;codecs=vp8'
   return {
-    blob: muxVp8Webm(chunks, totalDuration),
-    mimeType: 'video/webm;codecs=vp8',
+    blob: new Blob([target.buffer], { type: mimeType }),
+    mimeType,
+  }
+}
+
+function createNarrationAudioEncodeController(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  audioEncoder: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  AudioDataCtor: any,
+  track: NarrationTrack,
+  totalDuration: number,
+) {
+  const sampleRate = track.samplingRate!
+  const framesPerChunk = Math.max(1, Math.round(sampleRate * OPUS_FRAME_MS / 1000))
+  const totalAudioFrames = Math.ceil(Math.min(totalDuration, track.startTime + track.duration) * sampleRate)
+  let frameOffset = 0
+
+  return {
+    encodeUntil: async (timeSeconds: number) => {
+      const targetFrame = Math.min(totalAudioFrames, Math.ceil(timeSeconds * sampleRate))
+      while (frameOffset < targetFrame) {
+        const frameCount = Math.min(framesPerChunk, targetFrame - frameOffset)
+        const samples = new Float32Array(frameCount)
+        for (let i = 0; i < frameCount; i++) {
+          samples[i] = getNarrationFrameSample(track, frameOffset + i)
+        }
+        const audioData = new AudioDataCtor({
+          format: 'f32-planar',
+          sampleRate,
+          numberOfFrames: frameCount,
+          numberOfChannels: 1,
+          timestamp: Math.round(frameOffset / sampleRate * 1_000_000),
+          data: samples,
+        })
+        audioEncoder.encode(audioData)
+        audioData.close()
+        frameOffset += frameCount
+        while (audioEncoder.encodeQueueSize > WEB_CODECS_MAX_QUEUE_SIZE) {
+          await wait(0)
+        }
+      }
+    },
   }
 }
 

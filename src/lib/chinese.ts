@@ -1,4 +1,4 @@
-import type { CameraPoint } from '@/types'
+import type { CameraPoint, SubtitleCue } from '@/types'
 
 export type ChineseConversion = 'original' | 'tw' | 'cn'
 
@@ -28,5 +28,14 @@ export async function convertPointsCaptions(points: CameraPoint[], mode: 'tw' | 
       text: conv(p.caption.text),
       subtitle: conv(p.caption.subtitle),
     }
+  }))
+}
+
+export async function convertSubtitleCues(cues: SubtitleCue[], mode: 'tw' | 'cn'): Promise<SubtitleCue[]> {
+  const conv = mode === 'tw' ? await getTwConv() : await getCnConv()
+  return cues.map(cue => ({
+    ...cue,
+    text: conv(cue.text),
+    translation: conv(cue.translation),
   }))
 }

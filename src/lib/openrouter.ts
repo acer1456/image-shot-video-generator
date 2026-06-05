@@ -22,6 +22,23 @@ export interface AiGenerateResult {
   points: AiCameraPoint[]
 }
 
+export interface NarrationTranslationCueInput {
+  id: string
+  index: number
+  text: string
+  startTime: number
+  duration: number
+}
+
+export interface NarrationCueTranslation {
+  cueIndex: number
+  translation: string
+}
+
+export interface NarrationTranslationResult {
+  cues: NarrationCueTranslation[]
+}
+
 export interface PaintingInfo {
   title: string
   year: string
@@ -247,4 +264,129 @@ export async function generateWithAi(
   }
 
   return parsed
+}
+
+const NARRATION_TRANSLATION_MODEL =  'google/gemma-4-31b-it:free' // 'google/gemini-3.1-flash-lite' 
+
+const NARRATION_TRANSLATION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['cues'],
+  properties: {
+    cues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['cueIndex', 'translation'],
+        properties: {
+          cueIndex: { type: 'number' },
+          translation: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
+export async function translateNarrationCues(
+  apiKey: string,
+  narrationText: string,
+  cues: NarrationTranslationCueInput[],
+): Promise<NarrationTranslationResult> {
+  if (!apiKey.trim()) throw new Error('請先輸入 OpenRouter API Key')
+  if (!narrationText.trim()) throw new Error('缺少完整旁白內容')
+  if (!cues.length) throw new Error('目前沒有英文字幕可翻譯')
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'Artful Learning Narration Translator',
+    },
+    body: JSON.stringify({
+      model: NARRATION_TRANSLATION_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You translate English voiceover subtitles into natural Traditional Chinese for vertical short videos.',
+            'The English cues are short timing chunks, not translation units.',
+            'First understand and translate the full narration naturally, then distribute the Chinese translation across the cue indexes.',
+            'Each output item must contain only the Chinese text that should appear during that one cue.',
+            'Never repeat a full sentence across multiple cues.',
+            'If one Chinese sentence spans several cues, split the sentence into natural short parts across those cues.',
+            'If a cue should not show Chinese text, return an empty translation for that cue.',
+            'Use Traditional Chinese. Keep the tone spoken, cinematic, restrained, and natural.',
+            'Do not translate each English cue literally. Preserve meaning, sequence, emotional tone, and timing.',
+            'Return only structured JSON matching the schema.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            narrationText,
+            cues: cues.map(cue => ({
+              index: cue.index,
+              id: cue.id,
+              text: cue.text,
+              startTime: cue.startTime,
+              duration: cue.duration,
+            })),
+            instructions: {
+              output: 'Create one Traditional Chinese translation item for each cue index.',
+              grouping: 'Use the full narration for natural meaning, but split the final Chinese text back into cue-sized display parts.',
+              timing: 'Use cueIndex to point to the cue where that Chinese text should appear.',
+              style: 'Natural spoken Mandarin used in Taiwan, not literary Chinese, not word-for-word translation.',
+              avoid: 'Do not put the entire Chinese translation into every cue. Do not repeat the same long translation across cues.',
+            },
+          }),
+        },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'narration_cue_translations',
+          strict: true,
+          schema: NARRATION_TRANSLATION_SCHEMA,
+        },
+      },
+      max_tokens: 3000,
+    }),
+  })
+
+  if (!response.ok) {
+    let msg = `翻譯 API 錯誤 ${response.status}`
+    try {
+      const err = await response.json()
+      if (err?.error?.message) msg = err.error.message
+    } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+
+  const data = await response.json()
+  const raw: string = data.choices?.[0]?.message?.content ?? ''
+  if (!raw) throw new Error('翻譯模型未回傳任何內容')
+
+  let parsed: NarrationTranslationResult
+  try {
+    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()) as NarrationTranslationResult
+  } catch {
+    throw new Error('翻譯模型回傳的 JSON 無法解析，請重試')
+  }
+
+  if (!Array.isArray(parsed.cues)) {
+    throw new Error('翻譯模型回傳格式不符，缺少 cues')
+  }
+
+  const maxIndex = cues.length - 1
+  return {
+    cues: parsed.cues
+      .map(cue => ({
+        cueIndex: Math.max(0, Math.min(maxIndex, Math.floor(Number(cue.cueIndex)))),
+        translation: String(cue.translation ?? '').trim(),
+      }))
+      .filter(cue => cue.cueIndex >= 0),
+  }
 }

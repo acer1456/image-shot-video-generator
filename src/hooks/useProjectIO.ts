@@ -1,17 +1,17 @@
 import { useCallback, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { CameraPoint, ActiveTab, NarrationSegment, SubtitleStyle } from '@/types'
+import type { CameraPoint, ActiveTab, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName, sanitizeFileName, getTodayString } from '@/lib/utils'
 
 interface UseProjectIOOptions {
   narrationInputText: string
-  narrationSegments: NarrationSegment[]
-  subtitleStyle: SubtitleStyle
+  narrationTrack: NarrationTrack | null
+  subtitleCues: SubtitleCue[]
   setNarrationInputText: Dispatch<SetStateAction<string>>
-  setNarrationSegments: Dispatch<SetStateAction<NarrationSegment[]>>
-  setSubtitleStyle: Dispatch<SetStateAction<SubtitleStyle>>
+  setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
+  setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
 }
 
 function normalizeSubtitleStyle(value: unknown): SubtitleStyle {
@@ -38,6 +38,72 @@ function normalizeNarrationSegments(value: unknown): NarrationSegment[] {
     duration: Number(s.duration ?? 0),
     samplingRate: s.samplingRate != null ? Number(s.samplingRate) : undefined,
     audioData: undefined,
+  }))
+}
+
+function normalizeNarrationTrack(value: unknown, legacySegments: NarrationSegment[]): NarrationTrack | null {
+  if (value && typeof value === 'object') {
+    const t = value as Partial<NarrationTrack>
+    return {
+      id: String(t.id ?? crypto.randomUUID()),
+      text: String(t.text ?? ''),
+      voice: String(t.voice ?? 'af_heart'),
+      speed: Number(t.speed ?? 1),
+      startTime: Number(t.startTime ?? 0),
+      duration: Number(t.duration ?? 0),
+      audioData: undefined,
+      samplingRate: t.samplingRate != null ? Number(t.samplingRate) : undefined,
+      words: Array.isArray(t.words) ? t.words.map(w => ({
+        word: String(w.word ?? ''),
+        startTime: Number(w.startTime ?? 0),
+        duration: Number(w.duration ?? 0),
+      })) : [],
+      phonemes: Array.isArray(t.phonemes) ? t.phonemes.map(p => ({
+        phoneme: String(p.phoneme ?? ''),
+        startTime: Number(p.startTime ?? 0),
+        duration: Number(p.duration ?? 0),
+      })) : [],
+    }
+  }
+  if (!legacySegments.length) return null
+  return {
+    id: crypto.randomUUID(),
+    text: legacySegments.map(s => s.text).join(' '),
+    voice: 'af_heart',
+    speed: 1,
+    startTime: 0,
+    duration: legacySegments.reduce((max, s) => Math.max(max, s.startTime + s.duration), 0),
+    audioData: undefined,
+    samplingRate: undefined,
+    words: [],
+    phonemes: [],
+  }
+}
+
+function normalizeSubtitleCues(value: unknown, legacySegments: NarrationSegment[], legacyStyle: SubtitleStyle): SubtitleCue[] {
+  if (Array.isArray(value)) {
+    return (value as Partial<SubtitleCue>[]).map(cue => ({
+      id: String(cue.id ?? crypto.randomUUID()),
+      narrationId: String(cue.narrationId ?? ''),
+      text: String(cue.text ?? ''),
+      translation: String(cue.translation ?? ''),
+      startTime: Number(cue.startTime ?? 0),
+      duration: Number(cue.duration ?? 0),
+      style: normalizeSubtitleStyle(cue.style),
+      wordStartIndex: Number(cue.wordStartIndex ?? 0),
+      wordEndIndex: Number(cue.wordEndIndex ?? 0),
+    }))
+  }
+  return legacySegments.map(s => ({
+    id: crypto.randomUUID(),
+    narrationId: '',
+    text: s.text,
+    translation: '',
+    startTime: s.startTime,
+    duration: s.duration,
+    style: legacyStyle,
+    wordStartIndex: 0,
+    wordEndIndex: 0,
   }))
 }
 
@@ -95,8 +161,18 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
         activeTab: store.activeTab,
         points: store.points,
         narrationInputText: options?.narrationInputText ?? '',
-        narrationSegments: (options?.narrationSegments ?? []).map(({ id, text, startTime, duration, samplingRate }) => ({ id, text, startTime, duration, samplingRate })),
-        subtitleStyle: options?.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE,
+        narrationTrack: options?.narrationTrack ? {
+          id: options.narrationTrack.id,
+          text: options.narrationTrack.text,
+          voice: options.narrationTrack.voice,
+          speed: options.narrationTrack.speed,
+          startTime: options.narrationTrack.startTime,
+          duration: options.narrationTrack.duration,
+          samplingRate: options.narrationTrack.samplingRate,
+          words: options.narrationTrack.words,
+          phonemes: options.narrationTrack.phonemes,
+        } : null,
+        subtitleCues: options?.subtitleCues ?? [],
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -126,8 +202,10 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
       const tab: ActiveTab = ['camera', 'caption', 'assist'].includes(project.activeTab) ? project.activeTab : 'camera'
       store.setActiveTab(tab)
       options?.setNarrationInputText(typeof project.narrationInputText === 'string' ? project.narrationInputText : '')
-      options?.setNarrationSegments(normalizeNarrationSegments(project.narrationSegments))
-      options?.setSubtitleStyle(normalizeSubtitleStyle(project.subtitleStyle))
+      const legacyStyle = normalizeSubtitleStyle(project.subtitleStyle)
+      const legacySegments = normalizeNarrationSegments(project.narrationSegments)
+      options?.setNarrationTrack(normalizeNarrationTrack(project.narrationTrack, legacySegments))
+      options?.setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }

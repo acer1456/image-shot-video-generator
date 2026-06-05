@@ -1,31 +1,15 @@
-import { useState, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ChevronLeft, ChevronRight, Mic, Play, Pause, Trash2,
-  ArrowUp, ArrowDown, Loader2, PenLine, RotateCw,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp,
+  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
-import type { NarrationSegment, SubtitleStyle } from '@/types'
-import { useKokoroTTS, splitIntoSentences } from '@/hooks/useKokoroTTS'
-
-// ── Voice definitions ───────────────────────────────────────────────────
-const VOICES = [
-  { value: 'af_heart',   label: 'Heart (英式女聲・溫暖)' },
-  { value: 'af_sky',     label: 'Sky (美式女聲・明亮)' },
-  { value: 'af_bella',   label: 'Bella (美式女聲・優雅)' },
-  { value: 'af_sarah',   label: 'Sarah (美式女聲)' },
-  { value: 'af_nova',    label: 'Nova (美式女聲)' },
-  { value: 'af_nicole',  label: 'Nicole (美式女聲)' },
-  { value: 'am_adam',    label: 'Adam (美式男聲)' },
-  { value: 'am_michael', label: 'Michael (美式男聲)' },
-  { value: 'am_echo',    label: 'Echo (美式男聲)' },
-  { value: 'am_liam',    label: 'Liam (美式男聲)' },
-  { value: 'bf_emma',    label: 'Emma (英式女聲)' },
-  { value: 'bf_isabella',label: 'Isabella (英式女聲)' },
-  { value: 'bm_george',  label: 'George (英式男聲)' },
-  { value: 'bm_lewis',   label: 'Lewis (英式男聲)' },
-]
+import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import { DEFAULT_SUBTITLE_STYLE } from '@/types'
+import { useheadTTS } from '@/hooks/useheadTTS'
+import { translateNarrationCues } from '@/lib/openrouter'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -35,12 +19,14 @@ const FONT_OPTIONS = [
 ]
 
 export interface NarrationSidebarProps {
-  segments: NarrationSegment[]
-  onSegmentsChange: (segs: NarrationSegment[]) => void
+  track: NarrationTrack | null
+  onTrackChange: (track: NarrationTrack | null) => void
+  subtitleCues: SubtitleCue[]
+  onSubtitleCuesChange: (cues: SubtitleCue[]) => void
+  activeSubtitleId: string | null
+  onActiveSubtitleIdChange: (id: string | null) => void
   inputText: string
   onInputTextChange: (text: string) => void
-  subtitleStyle: SubtitleStyle
-  onSubtitleStyleChange: (style: SubtitleStyle) => void
   collapsed: boolean
   onToggleCollapse: () => void
 }
@@ -49,136 +35,251 @@ function formatSecs(s: number) {
   return `${s.toFixed(1)}s`
 }
 
-// Play a single segment's audio via Web Audio
-function playSegmentAudio(seg: NarrationSegment, audioCtxRef: React.RefObject<AudioContext | null>) {
-  if (!seg.audioData || !seg.samplingRate) return
-  if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-    audioCtxRef.current = new AudioContext()
+function clampPosition(value: number, min = 0.05, max = 0.95) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function updateCueStyle(cue: SubtitleCue, patch: Partial<SubtitleStyle>): SubtitleCue {
+  return {
+    ...cue,
+    style: {
+      ...cue.style,
+      ...patch,
+      subtitlePosition: patch.subtitlePosition
+        ? { ...patch.subtitlePosition }
+        : { ...cue.style.subtitlePosition },
+    },
   }
-  const ctx = audioCtxRef.current
-  const buffer = ctx.createBuffer(1, seg.audioData.length, seg.samplingRate)
-  buffer.copyToChannel(seg.audioData, 0)
-  const source = ctx.createBufferSource()
-  source.buffer = buffer
-  source.connect(ctx.destination)
-  source.start()
-  return source
+}
+
+function writeString(view: DataView, offset: number, value: string) {
+  for (let i = 0; i < value.length; i++) {
+    view.setUint8(offset + i, value.charCodeAt(i))
+  }
+}
+
+function createWavUrl(audioData: Float32Array, sampleRate: number) {
+  const bytesPerSample = 2
+  const dataSize = audioData.length * bytesPerSample
+  const buffer = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buffer)
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + dataSize, true)
+  writeString(view, 8, 'WAVE')
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * bytesPerSample, true)
+  view.setUint16(32, bytesPerSample, true)
+  view.setUint16(34, 8 * bytesPerSample, true)
+  writeString(view, 36, 'data')
+  view.setUint32(40, dataSize, true)
+  let offset = 44
+  for (let i = 0; i < audioData.length; i++) {
+    const sample = Math.max(-1, Math.min(1, audioData[i]))
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+    offset += bytesPerSample
+  }
+  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
 }
 
 export function NarrationSidebar({
-  segments, onSegmentsChange, inputText, onInputTextChange,
-  subtitleStyle, onSubtitleStyleChange, collapsed, onToggleCollapse,
+  track, onTrackChange,
+  subtitleCues, onSubtitleCuesChange,
+  activeSubtitleId, onActiveSubtitleIdChange,
+  inputText, onInputTextChange,
+  collapsed, onToggleCollapse,
 }: NarrationSidebarProps) {
-  const [voice, setVoice] = useState('af_heart')
-  const [showInput, setShowInput] = useState(true)
-  const { generate, status, cancel } = useKokoroTTS()
-  const audioCtxRef = useRef<AudioContext | null>(null)
-  const [playingId, setPlayingId] = useState<string | null>(null)
-  const playingSourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const { generate, cancel, status, voices } = useheadTTS()
+  const [voice, setVoice] = useState(track?.voice ?? 'af_heart')
+  const [speed, setSpeed] = useState(track?.speed ?? 1)
+  const [playing, setPlaying] = useState(false)
+  const [showPrompt, setShowPrompt] = useState(() => !inputText.trim())
+  const [showSubtitleStyle, setShowSubtitleStyle] = useState(false)
+  const [isTranslating, setIsTranslating] = useState(false)
+  const [translationError, setTranslationError] = useState('')
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioUrlRef = useRef<{ trackId: string; url: string } | null>(null)
 
-  const isGenerating = status.phase === 'loading_model' || status.phase === 'generating'
-  const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
+  const isGenerating = status.phase === 'loading' || status.phase === 'generating'
+  const activeCue = subtitleCues.find(cue => cue.id === activeSubtitleId) ?? subtitleCues[0] ?? null
 
-  // ── Generate handler ──────────────────────────────────────────────────
-  const cursorRef = useRef(0)
+  useEffect(() => {
+    if (track?.voice) setVoice(track.voice)
+  }, [track?.voice])
+
+  useEffect(() => {
+    if (track?.speed) setSpeed(track.speed)
+  }, [track?.speed])
 
   const handleGenerate = useCallback(async () => {
     const trimmed = inputText.trim()
     if (!trimmed || isGenerating) return
-    const sentences = splitIntoSentences(trimmed)
-    if (!sentences.length) return
-
-    // Reset before starting a new batch
-    cursorRef.current = 0
-    onSegmentsChange([])
-
-    // Auto-hide input area after generation starts so style panel is visible
-    setShowInput(false)
-
-    // Accumulate segments locally; push the full array to parent on each new card
-    // so the UI always sees the growing list without needing a functional updater.
-    const acc: NarrationSegment[] = []
-
-    await generate(sentences, voice, (r) => {
-      const start = cursorRef.current
-      cursorRef.current += r.duration
-      acc.push({
-        id: r.id,
-        text: r.text,
-        startTime: start,
-        duration: r.duration,
-        audioData: r.audioData,
-        samplingRate: r.samplingRate,
-      })
-      onSegmentsChange([...acc])
-    })
-  }, [inputText, voice, isGenerating, generate, onSegmentsChange])
-
-  // ── Single-segment regenerate ─────────────────────────────────────
-  const handleRegenerateSegment = useCallback(async (id: string) => {
-    if (isGenerating) return
-    const seg = segments.find(s => s.id === id)
-    if (!seg || !seg.text.trim()) return
-    setRegeneratingId(id)
-    try {
-      await generate([seg.text], voice, (r) => {
-        onSegmentsChange(segments.map(s =>
-          s.id === id ? { ...s, audioData: r.audioData, samplingRate: r.samplingRate, duration: r.duration } : s
-        ))
-      })
-    } finally {
-      setRegeneratingId(null)
+    audioRef.current?.pause()
+    audioRef.current = null
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current.url)
+      audioUrlRef.current = null
     }
-  }, [isGenerating, segments, generate, voice, onSegmentsChange])
+    setPlaying(false)
+    const shouldCreateSubtitles = subtitleCues.length === 0
+    onTrackChange(null)
+    if (shouldCreateSubtitles) {
+      onSubtitleCuesChange([])
+      onActiveSubtitleIdChange(null)
+    }
+    try {
+      const result = await generate(trimmed, voice, speed)
+      onTrackChange(result.track)
+      if (shouldCreateSubtitles) {
+        onSubtitleCuesChange(result.subtitleCues)
+        onActiveSubtitleIdChange(result.subtitleCues[0]?.id ?? null)
+      }
+      setShowPrompt(false)
+    } catch {
+      // useheadTTS owns the visible status text.
+    }
+  }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, speed, subtitleCues.length, voice])
 
-  // ── Segment card operations ───────────────────────────────────────────
-  const updateSegment = useCallback((id: string, patch: Partial<NarrationSegment>) => {
-    onSegmentsChange(segments.map(s => s.id === id ? { ...s, ...patch } : s))
-  }, [segments, onSegmentsChange])
-
-  const deleteSegment = useCallback((id: string) => {
-    onSegmentsChange(segments.filter(s => s.id !== id))
-  }, [segments, onSegmentsChange])
-
-  const moveSegment = useCallback((id: string, dir: 'up' | 'down') => {
-    const idx = segments.findIndex(s => s.id === id)
-    if (idx < 0) return
-    const next = [...segments]
-    const other = dir === 'up' ? idx - 1 : idx + 1
-    if (other < 0 || other >= next.length) return
-    // Swap startTimes so their positions follow the new order
-    const tmpTime = next[idx].startTime
-    next[idx] = { ...next[idx], startTime: next[other].startTime }
-    next[other] = { ...next[other], startTime: tmpTime }
-    // Swap array positions
-    ;[next[idx], next[other]] = [next[other], next[idx]]
-    onSegmentsChange(next)
-  }, [segments, onSegmentsChange])
-
-  const handlePlayPause = useCallback((seg: NarrationSegment) => {
-    if (playingId === seg.id) {
-      playingSourceRef.current?.stop()
-      playingSourceRef.current = null
-      setPlayingId(null)
+  const handlePlayPause = useCallback(() => {
+    if (!track) return
+    if (playing) {
+      audioRef.current?.pause()
+      audioRef.current = null
+      setPlaying(false)
       return
     }
-    // Stop previous
-    playingSourceRef.current?.stop()
-    playingSourceRef.current = null
-    const source = playSegmentAudio(seg, audioCtxRef)
-    if (source) {
-      playingSourceRef.current = source
-      setPlayingId(seg.id)
-      source.onended = () => {
-        if (playingSourceRef.current === source) {
-          playingSourceRef.current = null
-          setPlayingId(null)
-        }
+    if (!track.audioData || !track.samplingRate) return
+    if (audioUrlRef.current?.trackId !== track.id) {
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current.url)
+      audioUrlRef.current = {
+        trackId: track.id,
+        url: createWavUrl(track.audioData, track.samplingRate),
       }
     }
-  }, [playingId])
+    const source = new Audio(audioUrlRef.current.url)
+    audioRef.current = source
+    setPlaying(true)
+    source.onended = () => {
+      if (audioRef.current === source) {
+        audioRef.current = null
+        setPlaying(false)
+      }
+    }
+    source.play().catch(() => {
+      if (audioRef.current === source) audioRef.current = null
+      setPlaying(false)
+    })
+  }, [playing, track])
 
-  // ── Collapsed strip ───────────────────────────────────────────────────
+  useEffect(() => () => {
+    audioRef.current?.pause()
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current.url)
+  }, [])
+
+  const updateActiveCue = useCallback((patch: Partial<SubtitleCue>) => {
+    if (!activeCue) return
+    onSubtitleCuesChange(subtitleCues.map(cue =>
+      cue.id === activeCue.id ? { ...cue, ...patch } : cue
+    ))
+  }, [activeCue, onSubtitleCuesChange, subtitleCues])
+
+  const updateActiveCueStyle = useCallback((patch: Partial<SubtitleStyle>) => {
+    if (!activeCue) return
+    onSubtitleCuesChange(subtitleCues.map(cue =>
+      cue.id === activeCue.id ? updateCueStyle(cue, patch) : cue
+    ))
+  }, [activeCue, onSubtitleCuesChange, subtitleCues])
+
+  const updateActiveCuePosition = useCallback((patch: Partial<{ x: number; y: number }>) => {
+    if (!activeCue) return
+    const current = activeCue.style.subtitlePosition
+    updateActiveCueStyle({
+      subtitlePosition: {
+        x: clampPosition(patch.x ?? current.x),
+        y: clampPosition(patch.y ?? current.y, 0.1, 0.97),
+      },
+    })
+  }, [activeCue, updateActiveCueStyle])
+
+  const applyActivePositionToAll = useCallback(() => {
+    if (!activeCue) return
+    const position = { ...activeCue.style.subtitlePosition }
+    onSubtitleCuesChange(subtitleCues.map(cue => updateCueStyle(cue, { subtitlePosition: position })))
+  }, [activeCue, onSubtitleCuesChange, subtitleCues])
+
+  const applyActiveStyleToAll = useCallback(() => {
+    if (!activeCue) return
+    const style = {
+      ...activeCue.style,
+      subtitlePosition: { ...activeCue.style.subtitlePosition },
+    }
+    onSubtitleCuesChange(subtitleCues.map(cue => ({ ...cue, style })))
+  }, [activeCue, onSubtitleCuesChange, subtitleCues])
+
+  const handleTranslate = useCallback(async () => {
+    if (isTranslating) return
+    const apiKey = localStorage.getItem('openrouter_api_key') ?? ''
+    if (!apiKey.trim()) {
+      setTranslationError('請先在 AI 面板輸入 OpenRouter API Key')
+      return
+    }
+    const narrationText = (track?.text || inputText).trim()
+    if (!narrationText || !subtitleCues.length) return
+    setIsTranslating(true)
+    setTranslationError('')
+    try {
+      const result = await translateNarrationCues(
+        apiKey.trim(),
+        narrationText,
+        subtitleCues.map((cue, index) => ({
+          id: cue.id,
+          index,
+          text: cue.text,
+          startTime: cue.startTime,
+          duration: cue.duration,
+        })),
+      )
+      const translations = new Map(result.cues.map(cue => [cue.cueIndex, cue.translation]))
+      onSubtitleCuesChange(subtitleCues.map((cue, index) => ({
+        ...cue,
+        translation: translations.get(index) ?? cue.translation,
+      })))
+    } catch (error) {
+      setTranslationError(error instanceof Error ? error.message : '中文字幕產生失敗')
+    } finally {
+      setIsTranslating(false)
+    }
+  }, [inputText, isTranslating, onSubtitleCuesChange, subtitleCues, track])
+
+  let statusNode: React.ReactNode = null
+  if (status.phase === 'loading') {
+    statusNode = (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>{status.message}</span>
+        <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+          <div className="h-full bg-primary transition-all" style={{ width: `${status.progress}%` }} />
+        </div>
+      </div>
+    )
+  } else if (status.phase === 'generating') {
+    statusNode = (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>{status.message}</span>
+      </div>
+    )
+  } else if (status.phase === 'error') {
+    statusNode = (
+      <div className="text-xs text-red-500 rounded-md bg-red-500/10 px-2 py-1">
+        {status.message}
+      </div>
+    )
+  }
+
   if (collapsed) {
     return (
       <div
@@ -199,66 +300,39 @@ export function NarrationSidebar({
     )
   }
 
-  // ── Status message ────────────────────────────────────────────────────
-  let statusNode: React.ReactNode = null
-  if (status.phase === 'loading_model') {
-    statusNode = (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span>{status.message}</span>
-        <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
-          <div className="h-full bg-primary transition-all" style={{ width: `${status.progress}%` }} />
-        </div>
-      </div>
-    )
-  } else if (status.phase === 'generating') {
-    statusNode = (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        <span>生成第 {status.segIndex + 1} / {status.total} 句…</span>
-      </div>
-    )
-  } else if (status.phase === 'error') {
-    statusNode = (
-      <div className="text-xs text-red-500 rounded-md bg-red-500/10 px-2 py-1">
-        {status.message}
-      </div>
-    )
-  }
+  const cueStyle = activeCue?.style ?? DEFAULT_SUBTITLE_STYLE
 
   return (
     <aside className="w-72 flex-shrink-0 rounded-xl border border-border bg-card flex flex-col overflow-hidden">
-      {/* Header */}
       <div className="p-3 border-b border-border flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <Mic className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-bold">旁白</h2>
-          {segments.length > 0 && (
+          {track && (
             <span className="text-xs text-muted-foreground bg-muted rounded px-1">
-              {segments.length}段
+              {formatSecs(track.duration)}
             </span>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost" size="icon" className="h-7 w-7"
-            onClick={() => setShowInput(v => !v)}
-            title={showInput ? '隱藏輸入框，顯示字幕樣式' : '顯示輸入框'}
+          <button
+            onClick={() => setShowPrompt(v => !v)}
+            title="查看目前旁白內容"
+            className={`h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${showPrompt ? 'text-primary' : 'text-muted-foreground'}`}
           >
-            <PenLine className="h-3.5 w-3.5" />
-          </Button>
+            <FileText className="h-4 w-4" />
+          </button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleCollapse} title="收合旁白面板">
             <ChevronLeft className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
-      {/* Input area (toggle) */}
-      {showInput ? (
-        <div className="p-3 border-b border-border flex flex-col gap-2 flex-shrink-0">
+      {showPrompt && (
+        <div className="p-3 flex flex-col gap-2 flex-shrink-0">
           <Textarea
-            placeholder="輸入旁白內容（支援多句，按句子分段生成）…"
-            className="text-xs resize-none min-h-[80px]"
+            placeholder="輸入完整英文旁白內容…"
+            className="text-xs resize-none min-h-[96px]"
             value={inputText}
             onChange={e => onInputTextChange(e.target.value)}
             disabled={isGenerating}
@@ -270,7 +344,7 @@ export function NarrationSidebar({
               onChange={e => setVoice(e.target.value)}
               disabled={isGenerating}
             >
-              {VOICES.map(v => (
+              {voices.map(v => (
                 <option key={v.value} value={v.value}>{v.label}</option>
               ))}
             </select>
@@ -279,254 +353,255 @@ export function NarrationSidebar({
                 取消
               </Button>
             ) : (
-              <Button
-                size="sm"
-                className="text-xs px-3"
-                disabled={!inputText.trim()}
-                onClick={handleGenerate}
-              >
+              <Button size="sm" className="text-xs px-3" disabled={!inputText.trim()} onClick={handleGenerate}>
                 生成
               </Button>
             )}
           </div>
-          {statusNode}
-        </div>
-      ) : (
-        /* Subtitle style panel */
-        <div className="p-3 border-b border-border flex flex-col gap-3 flex-shrink-0">
-          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">字幕樣式</p>
-
-          {/* Font family */}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground">字體</label>
-            <select
-              className="text-xs rounded-md border border-input bg-background px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-              value={subtitleStyle.fontFamily}
-              onChange={e => onSubtitleStyleChange({ ...subtitleStyle, fontFamily: e.target.value })}
-            >
-              {FONT_OPTIONS.map(f => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Font size */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <label className="text-xs text-muted-foreground">字體大小</label>
-              <span className="text-[10px] text-muted-foreground">{Math.round(subtitleStyle.fontSizeRatio * 1000) / 10}%</span>
+              <label className="text-xs text-muted-foreground">語速</label>
+              <span className="text-[10px] text-muted-foreground">{speed.toFixed(2)}x</span>
             </div>
             <Slider
-              min={35} max={80} step={5}
-              value={Math.round(subtitleStyle.fontSizeRatio * 1000)}
-              onChange={v => onSubtitleStyleChange({ ...subtitleStyle, fontSizeRatio: v / 1000 })}
+              min={60} max={160} step={5}
+              value={Math.round(speed * 100)}
+              onChange={v => setSpeed(v / 100)}
             />
           </div>
-
-          {/* Shadow toggle */}
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-muted-foreground">陰影</label>
-            <button
-              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                subtitleStyle.shadowEnabled
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-muted text-muted-foreground border-border'
-              }`}
-              onClick={() => onSubtitleStyleChange({ ...subtitleStyle, shadowEnabled: !subtitleStyle.shadowEnabled })}
-            >
-              {subtitleStyle.shadowEnabled ? '開' : '關'}
-            </button>
-          </div>
-
-          {subtitleStyle.shadowEnabled && (
-            <>
-              {/* Shadow blur */}
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs text-muted-foreground">模糊強度</label>
-                  <span className="text-[10px] text-muted-foreground">{subtitleStyle.shadowBlur}</span>
-                </div>
-                <Slider
-                  min={0} max={24} step={1}
-                  value={subtitleStyle.shadowBlur}
-                  onChange={v => onSubtitleStyleChange({ ...subtitleStyle, shadowBlur: v })}
-                />
-              </div>
-
-              {/* Shadow opacity */}
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs text-muted-foreground">陰影透明度</label>
-                  <span className="text-[10px] text-muted-foreground">{Math.round(subtitleStyle.shadowOpacity * 100)}%</span>
-                </div>
-                <Slider
-                  min={10} max={100} step={5}
-                  value={Math.round(subtitleStyle.shadowOpacity * 100)}
-                  onChange={v => onSubtitleStyleChange({ ...subtitleStyle, shadowOpacity: v / 100 })}
-                />
-              </div>
-            </>
-          )}
-
-          {statusNode && <div>{statusNode}</div>}
+          {statusNode}
+        </div>
+      )}
+      {!showPrompt && statusNode && (
+        <div className="px-3 py-2 border-b border-border flex-shrink-0">
+          {statusNode}
+        </div>
+      )}
+      {showPrompt && track && (
+        <div className="px-3 pb-3 border-b border-border flex items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={handlePlayPause}>
+            {playing ? <Pause className="h-3 w-3 mr-1" /> : <Play className="h-3 w-3 mr-1" />}
+            {playing ? '暫停' : '播放'}
+          </Button>
+          <span>{subtitleCues.length} 個字幕</span>
         </div>
       )}
 
-      {/* Segment cards */}
-      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
-        {segments.length === 0 && !isGenerating && (
+      <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+        {!activeCue ? (
           <p className="text-xs text-muted-foreground text-center py-6 px-2 opacity-60">
-            輸入文字並點擊「生成」後，旁白片段會出現在這裡
+            生成旁白後，點擊時間軸上的字幕區塊即可編輯字幕卡片
           </p>
+        ) : (
+          <>
+            <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-muted-foreground">字幕卡片</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatSecs(activeCue.startTime)} / {formatSecs(activeCue.duration)}
+                  </span>
+                  <button
+                    onClick={() => setShowSubtitleStyle(v => !v)}
+                    title="字幕樣式"
+                    className={`h-6 w-6 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${showSubtitleStyle ? 'text-primary' : 'text-muted-foreground'}`}
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <Textarea
+                className="text-xs resize-none min-h-[64px]"
+                value={activeCue.text}
+                onChange={e => updateActiveCue({ text: e.target.value })}
+              />
+              <Textarea
+                placeholder="中文字幕／副字幕"
+                className="text-xs resize-none min-h-[64px]"
+                value={activeCue.translation}
+                onChange={e => updateActiveCue({ translation: e.target.value })}
+              />
+              <div className="flex flex-col gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs justify-center"
+                  disabled={isTranslating || subtitleCues.length === 0 || !(track?.text || inputText).trim()}
+                  onClick={handleTranslate}
+                >
+                  {isTranslating
+                    ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    : <Languages className="h-3.5 w-3.5 mr-1" />}
+                  產生中文字幕
+                </Button>
+                {translationError && (
+                  <p className="text-[10px] text-red-500 leading-snug">{translationError}</p>
+                )}
+              </div>
+            </div>
+          
+          {showSubtitleStyle && (
+            <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-muted-foreground">字幕位置</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={applyActivePositionToAll}
+                >
+                  全局位置
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-[1fr_auto_1fr] grid-rows-3 items-center gap-1">
+                <span />
+                <button
+                  className="h-7 w-7 rounded border border-border bg-muted/40 hover:bg-muted flex items-center justify-center text-muted-foreground"
+                  title="上移"
+                  onClick={() => updateActiveCuePosition({ y: cueStyle.subtitlePosition.y - 0.01 })}
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
+                <span />
+                <button
+                  className="h-7 w-7 rounded border border-border bg-muted/40 hover:bg-muted flex items-center justify-center text-muted-foreground justify-self-end"
+                  title="左移"
+                  onClick={() => updateActiveCuePosition({ x: cueStyle.subtitlePosition.x - 0.01 })}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="text-[8px] text-muted-foreground text-center">
+                  {Math.round(cueStyle.subtitlePosition.x * 100)}%H <br/>{Math.round(cueStyle.subtitlePosition.y * 100)}%V
+                </span>
+                <button
+                  className="h-7 w-7 rounded border border-border bg-muted/40 hover:bg-muted flex items-center justify-center text-muted-foreground"
+                  title="右移"
+                  onClick={() => updateActiveCuePosition({ x: cueStyle.subtitlePosition.x + 0.01 })}
+                >
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <span />
+                <button
+                  className="h-7 w-7 rounded border border-border bg-muted/40 hover:bg-muted flex items-center justify-center text-muted-foreground"
+                  title="下移"
+                  onClick={() => updateActiveCuePosition({ y: cueStyle.subtitlePosition.y + 0.01 })}
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </button>
+                <span />
+              </div>
+
+              {/* <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground">左右</label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.subtitlePosition.x * 100)}%</span>
+                </div>
+                <Slider
+                  min={1} max={95} step={1}
+                  value={Math.round(cueStyle.subtitlePosition.x * 100)}
+                  onChange={v => updateActiveCuePosition({ x: v / 100 })}
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground">上下</label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.subtitlePosition.y * 100)}%</span>
+                </div>
+                <Slider
+                  min={1} max={97} step={1}
+                  value={Math.round(cueStyle.subtitlePosition.y * 100)}
+                  onChange={v => updateActiveCuePosition({ y: v / 100 })}
+                />
+              </div> */}
+            </div>
+           )}
+
+            {showSubtitleStyle && (
+            <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold text-muted-foreground">字幕樣式</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={applyActiveStyleToAll}
+                >
+                  套用全部
+                </Button>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">字體</label>
+                <select
+                  className="text-xs rounded-md border border-input bg-background px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
+                  value={cueStyle.fontFamily}
+                  onChange={e => updateActiveCueStyle({ fontFamily: e.target.value })}
+                >
+                  {FONT_OPTIONS.map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground">字體大小</label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.fontSizeRatio * 1000) / 10}%</span>
+                </div>
+                <Slider
+                  min={35} max={80} step={5}
+                  value={Math.round(cueStyle.fontSizeRatio * 1000)}
+                  onChange={v => updateActiveCueStyle({ fontSizeRatio: v / 1000 })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">陰影</label>
+                <button
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                    cueStyle.shadowEnabled
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted text-muted-foreground border-border'
+                  }`}
+                  onClick={() => updateActiveCueStyle({ shadowEnabled: !cueStyle.shadowEnabled })}
+                >
+                  {cueStyle.shadowEnabled ? '開' : '關'}
+                </button>
+              </div>
+
+              {cueStyle.shadowEnabled && (
+                <>
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-muted-foreground">模糊強度</label>
+                      <span className="text-[10px] text-muted-foreground">{cueStyle.shadowBlur}</span>
+                    </div>
+                    <Slider
+                      min={0} max={24} step={1}
+                      value={cueStyle.shadowBlur}
+                      onChange={v => updateActiveCueStyle({ shadowBlur: v })}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs text-muted-foreground">陰影透明度</label>
+                      <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.shadowOpacity * 100)}%</span>
+                    </div>
+                    <Slider
+                      min={10} max={100} step={5}
+                      value={Math.round(cueStyle.shadowOpacity * 100)}
+                      onChange={v => updateActiveCueStyle({ shadowOpacity: v / 100 })}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+            )}
+          </>
         )}
-        {segments.map((seg, idx) => (
-          <SegmentCard
-            key={seg.id}
-            seg={seg}
-            index={idx}
-            total={segments.length}
-            isPlaying={playingId === seg.id}
-            isRegenerating={regeneratingId === seg.id}
-            isGenerating={isGenerating}
-            onTextChange={text => updateSegment(seg.id, { text })}
-            onStartTimeChange={startTime => updateSegment(seg.id, { startTime })}
-            onDelete={() => deleteSegment(seg.id)}
-            onMoveUp={() => moveSegment(seg.id, 'up')}
-            onMoveDown={() => moveSegment(seg.id, 'down')}
-            onPlayPause={() => handlePlayPause(seg)}
-            onRegenerate={() => handleRegenerateSegment(seg.id)}
-          />
-        ))}
       </div>
     </aside>
-  )
-}
-
-// ── SegmentCard sub-component ─────────────────────────────────────────────
-interface SegmentCardProps {
-  seg: NarrationSegment
-  index: number
-  total: number
-  isPlaying: boolean
-  isRegenerating?: boolean
-  isGenerating?: boolean
-  onTextChange: (text: string) => void
-  onStartTimeChange: (t: number) => void
-  onDelete: () => void
-  onMoveUp: () => void
-  onMoveDown: () => void
-  onPlayPause: () => void
-  onRegenerate?: () => void
-}
-
-function SegmentCard({
-  seg, index, total, isPlaying, isRegenerating, isGenerating,
-  onTextChange, onStartTimeChange, onDelete, onMoveUp, onMoveDown, onPlayPause, onRegenerate,
-}: SegmentCardProps) {
-  const [editingText, setEditingText] = useState(false)
-  const [localText, setLocalText] = useState(seg.text)
-  const [localStart, setLocalStart] = useState(String(seg.startTime.toFixed(1)))
-
-  const commitText = () => {
-    setEditingText(false)
-    const t = localText.trim()
-    if (t && t !== seg.text) onTextChange(t)
-    else setLocalText(seg.text)
-  }
-
-  const commitStart = () => {
-    const v = parseFloat(localStart)
-    if (!isNaN(v) && v >= 0) onStartTimeChange(Math.round(v * 10) / 10)
-    else setLocalStart(String(seg.startTime.toFixed(1)))
-  }
-
-  return (
-    <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-1.5">
-      {/* Row 1: index + time badge + actions */}
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] font-bold text-muted-foreground w-4 text-center">{index + 1}</span>
-        {/* Start time */}
-        <input
-          className="w-12 text-[10px] text-center bg-muted/60 border border-transparent focus:border-border rounded px-1 py-0.5 outline-none"
-          value={localStart}
-          onChange={e => setLocalStart(e.target.value)}
-          onBlur={commitStart}
-          onKeyDown={e => e.key === 'Enter' && commitStart()}
-          title="起始時間 (秒)"
-        />
-        <span className="text-[10px] text-muted-foreground">+{formatSecs(seg.duration)}</span>
-        <div className="flex-1" />
-        {/* Play/pause */}
-        {seg.audioData && (
-          <button
-            className="p-1 rounded hover:bg-muted/80 text-primary"
-            onClick={onPlayPause}
-            title={isPlaying ? '暫停' : '播放'}
-          >
-            {isPlaying
-              ? <Pause className="h-3 w-3" />
-              : <Play className="h-3 w-3" />}
-          </button>
-        )}
-        {/* Regenerate audio */}
-        <button
-          className="p-1 rounded hover:bg-muted/80 text-muted-foreground disabled:opacity-30"
-          onClick={onRegenerate}
-          disabled={isGenerating}
-          title={seg.audioData ? '重新生成語音' : '生成語音'}
-        >
-          {isRegenerating
-            ? <Loader2 className="h-3 w-3 animate-spin" />
-            : <RotateCw className="h-3 w-3" />}
-        </button>
-        {/* Move up */}
-        <button
-          className="p-1 rounded hover:bg-muted/80 text-muted-foreground disabled:opacity-30"
-          onClick={onMoveUp}
-          disabled={index === 0}
-          title="上移"
-        >
-          <ArrowUp className="h-3 w-3" />
-        </button>
-        {/* Move down */}
-        <button
-          className="p-1 rounded hover:bg-muted/80 text-muted-foreground disabled:opacity-30"
-          onClick={onMoveDown}
-          disabled={index === total - 1}
-          title="下移"
-        >
-          <ArrowDown className="h-3 w-3" />
-        </button>
-        {/* Delete */}
-        <button
-          className="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500"
-          onClick={onDelete}
-          title="刪除"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-      </div>
-
-      {/* Row 2: text */}
-      {editingText ? (
-        <textarea
-          autoFocus
-          className="w-full text-xs bg-muted/60 border border-border rounded px-2 py-1 resize-none outline-none focus:ring-1 focus:ring-ring"
-          rows={2}
-          value={localText}
-          onChange={e => setLocalText(e.target.value)}
-          onBlur={commitText}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText() } }}
-        />
-      ) : (
-        <p
-          className="text-xs text-foreground leading-relaxed cursor-text rounded px-1 hover:bg-muted/40 transition-colors"
-          onClick={() => { setLocalText(seg.text); setEditingText(true) }}
-          title="點擊編輯文字"
-        >
-          {seg.text || <span className="italic text-muted-foreground">（空白）</span>}
-        </p>
-      )}
-    </div>
   )
 }

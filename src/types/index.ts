@@ -99,6 +99,31 @@ export interface NarrationSegment {
   samplingRate?: number
 }
 
+export interface NarrationWordTimestamp {
+  word: string
+  startTime: number
+  duration: number
+}
+
+export interface NarrationPhonemeTimestamp {
+  phoneme: string
+  startTime: number
+  duration: number
+}
+
+export interface NarrationTrack {
+  id: string
+  text: string
+  voice: string
+  speed: number
+  startTime: number
+  duration: number
+  audioData?: Float32Array
+  samplingRate?: number
+  words: NarrationWordTimestamp[]
+  phonemes: NarrationPhonemeTimestamp[]
+}
+
 export interface SubtitleStyle {
   fontFamily: string      // CSS font-family string
   fontSizeRatio: number   // fraction of canvas.width, e.g. 0.055
@@ -106,6 +131,18 @@ export interface SubtitleStyle {
   shadowBlur: number      // 0–24 px
   shadowOpacity: number   // 0–1
   subtitlePosition: { x: number; y: number }  // normalized 0–1
+}
+
+export interface SubtitleCue {
+  id: string
+  narrationId: string
+  text: string
+  translation: string
+  startTime: number
+  duration: number
+  style: SubtitleStyle
+  wordStartIndex: number
+  wordEndIndex: number
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {

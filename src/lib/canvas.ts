@@ -237,7 +237,6 @@ export function drawNarrationSubtitle(
   const sizeRatio = style?.fontSizeRatio ?? 0.055
   const fontFamily = style?.fontFamily ?? "Georgia, 'Times New Roman', serif"
   const fontSize = Math.round(canvas.width * sizeRatio)
-  ctx.font = `700 ${fontSize}px ${fontFamily}`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
 
@@ -245,16 +244,20 @@ export function drawNarrationSubtitle(
   const sidePadding = Math.round(canvas.width * 0.06)
   const maxLineWidth = canvas.width - sidePadding * 2
 
-  // Greedy word-wrap using pixel measurement: no font scaling, no deformation.
-  // Show ALL resulting lines — no cap. Card pagination upstream ensures the word
-  // count is already bounded, so overflow is impossible given a reasonable font size.
-  const words = text.split(' ').filter(w => w.length > 0)
-  const visibleLines = wrapWordsToLines(words, ctx, maxLineWidth)
+  const [mainText = '', subText = ''] = text.split('\n')
+  ctx.font = `700 ${fontSize}px ${fontFamily}`
+  const mainLines = mainText.trim() ? [mainText.trim()] : []
+  const subFontSize = Math.round(fontSize * 0.72)
+  ctx.font = `650 ${subFontSize}px ${fontFamily}`
+  const subLines = subText.trim()
+    ? wrapWordsToLines(Array.from(subText.trim()), ctx, maxLineWidth).map(line => line.replace(/\s+/g, ''))
+    : []
 
   const posX = style?.subtitlePosition?.x ?? 0.5
   const posY = style?.subtitlePosition?.y ?? 0.87
   const cx = canvas.width * posX
   const lineHeight = Math.round(fontSize * 1.35)
+  const subLineHeight = Math.round(subFontSize * 1.35)
   const centerY = Math.round(canvas.height * posY)
 
   const shadowEnabled = style?.shadowEnabled ?? true
@@ -266,9 +269,17 @@ export function drawNarrationSubtitle(
   ctx.shadowOffsetY = shadowEnabled ? 2 : 0
   ctx.fillStyle = '#ffffff'
 
-  for (let i = 0; i < visibleLines.length; i++) {
-    const offset = Math.round((i - (visibleLines.length - 1) / 2) * lineHeight)
-    ctx.fillText(visibleLines[i], cx, centerY + offset)
+  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+  let y = centerY - totalHeight / 2 + lineHeight / 2
+  ctx.font = `700 ${fontSize}px ${fontFamily}`
+  for (const line of mainLines) {
+    ctx.fillText(line, cx, y)
+    y += lineHeight
+  }
+  ctx.font = `650 ${subFontSize}px ${fontFamily}`
+  for (const line of subLines) {
+    ctx.fillText(line, cx, y - (lineHeight - subLineHeight) / 2)
+    y += subLineHeight
   }
 
   ctx.restore()
