@@ -61,6 +61,20 @@ function AppInner() {
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
+
+  const releasePreviewNarrationAudio = useCallback(() => {
+    stopNarrationAudio(narrationSourcesRef)
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      audioCtxRef.current.close().catch(() => undefined)
+    }
+    audioCtxRef.current = null
+  }, [])
+
+  const handleNarrationTrackChange = useCallback((track: NarrationTrack | null) => {
+    releasePreviewNarrationAudio()
+    setNarrationTrack(track)
+  }, [releasePreviewNarrationAudio])
+
   const { loadingPainting, loadImageFromUrl, saveProject, loadProject } = useProjectIO(store, triggerRedraw, {
     narrationInputText,
     narrationTrack,
@@ -452,7 +466,7 @@ function AppInner() {
         <div className="flex flex-1 min-h-0 overflow-hidden gap-3">
           <NarrationSidebar
             track={narrationTrack}
-            onTrackChange={setNarrationTrack}
+            onTrackChange={handleNarrationTrackChange}
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             activeSubtitleId={activeSubtitleId}
@@ -573,7 +587,7 @@ function AppInner() {
             onPause={() => { previewCancelRef.current = true; store.setIsPreviewing(false); stopNarrationAudio(narrationSourcesRef) }}
             onPointSelect={selectPointAndSyncTimeline}
             narrationTrack={narrationTrack}
-            onNarrationTrackChange={setNarrationTrack}
+            onNarrationTrackChange={handleNarrationTrackChange}
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             onSubtitleSelect={setActiveSubtitleId}

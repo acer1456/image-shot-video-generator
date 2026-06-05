@@ -170,6 +170,22 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
   const narrationActions = useMemo<TimelineAction[]>(() => {
     if (!narrationTrack || narrationTrack.duration <= 0) return []
+    if (narrationTrack.segments?.length) {
+      return narrationTrack.segments.map((segment, index) => ({
+        id:       `narration-${segment.id}`,
+        start:    narrationTrack.startTime + segment.startTime,
+        end:      narrationTrack.startTime + segment.startTime + segment.duration,
+        effectId: 'narration',
+        movable:  false,
+        flexible: false,
+        data: {
+          label: segment.text.slice(0, 24) || `旁白 ${index + 1}`,
+          pointIndex: index,
+          type: 'narration',
+          trackId: narrationTrack.id,
+        },
+      } as RichAction as TimelineAction))
+    }
     return [{
       id:       `narration-${narrationTrack.id}`,
       start:    narrationTrack.startTime,

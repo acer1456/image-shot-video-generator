@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { ActiveTab, CameraPoint, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import type { ActiveTab, CameraPoint, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clamp, normalizeProjectName } from '@/lib/utils'
 
@@ -43,6 +43,30 @@ function normalizeLegacySegments(value: unknown): NarrationSegment[] {
     samplingRate: s.samplingRate != null ? Number(s.samplingRate) : undefined,
     audioData: undefined,
   }))
+}
+
+function normalizeNarrationAudioSegments(value: unknown, trackId: string, text: string, duration: number): NarrationAudioSegment[] {
+  if (Array.isArray(value)) {
+    return (value as Partial<NarrationAudioSegment>[]).map(segment => ({
+      id: String(segment.id ?? crypto.randomUUID()),
+      text: String(segment.text ?? ''),
+      startTime: Number(segment.startTime ?? 0),
+      duration: Number(segment.duration ?? 0),
+      pauseAfterMs: Number(segment.pauseAfterMs ?? 0),
+      wordStartIndex: Number(segment.wordStartIndex ?? 0),
+      wordEndIndex: Number(segment.wordEndIndex ?? 0),
+    }))
+  }
+  if (duration <= 0) return []
+  return [{
+    id: `${trackId}-segment-0`,
+    text,
+    startTime: 0,
+    duration,
+    pauseAfterMs: 0,
+    wordStartIndex: 0,
+    wordEndIndex: 0,
+  }]
 }
 
 export function useAutosave({
@@ -101,9 +125,11 @@ export function useAutosave({
             text: narrationTrack.text,
             voice: narrationTrack.voice,
             speed: narrationTrack.speed,
+            pauseIntensity: narrationTrack.pauseIntensity,
             startTime: narrationTrack.startTime,
             duration: narrationTrack.duration,
             samplingRate: narrationTrack.samplingRate,
+            segments: narrationTrack.segments,
             words: narrationTrack.words,
             phonemes: narrationTrack.phonemes,
           } : null,
@@ -146,34 +172,51 @@ export function useAutosave({
     const track = project.narrationTrack && typeof project.narrationTrack === 'object'
       ? project.narrationTrack as Partial<NarrationTrack>
       : null
+    const trackId = String(track?.id ?? crypto.randomUUID())
+    const trackText = String(track?.text ?? '')
+    const trackDuration = Number(track?.duration ?? 0)
     setNarrationTrack(track ? {
-      id: String(track.id ?? crypto.randomUUID()),
-      text: String(track.text ?? ''),
+      id: trackId,
+      text: trackText,
       voice: String(track.voice ?? 'af_heart'),
       speed: Number(track.speed ?? 1),
+      pauseIntensity: Math.max(0, Math.min(6, Math.round(Number(track.pauseIntensity ?? 1)))),
       startTime: Number(track.startTime ?? 0),
-      duration: Number(track.duration ?? 0),
+      duration: trackDuration,
       audioData: undefined,
       samplingRate: track.samplingRate != null ? Number(track.samplingRate) : undefined,
+      segments: normalizeNarrationAudioSegments(track.segments, trackId, trackText, trackDuration),
       words: Array.isArray(track.words) ? track.words.map(w => ({
         word: String(w.word ?? ''),
         startTime: Number(w.startTime ?? 0),
         duration: Number(w.duration ?? 0),
+        segmentId: typeof w.segmentId === 'string' ? w.segmentId : undefined,
       })) : [],
       phonemes: Array.isArray(track.phonemes) ? track.phonemes.map(p => ({
         phoneme: String(p.phoneme ?? ''),
         startTime: Number(p.startTime ?? 0),
         duration: Number(p.duration ?? 0),
+        segmentId: typeof p.segmentId === 'string' ? p.segmentId : undefined,
       })) : [],
     } : legacySegments.length ? {
-      id: crypto.randomUUID(),
+      id: trackId,
       text: legacySegments.map(s => s.text).join(' '),
       voice: 'af_heart',
       speed: 1,
+      pauseIntensity: 1,
       startTime: 0,
       duration: legacySegments.reduce((max, s) => Math.max(max, s.startTime + s.duration), 0),
       audioData: undefined,
       samplingRate: undefined,
+      segments: legacySegments.map((segment, index) => ({
+        id: segment.id || `${trackId}-segment-${index}`,
+        text: segment.text,
+        startTime: segment.startTime,
+        duration: segment.duration,
+        pauseAfterMs: 0,
+        wordStartIndex: 0,
+        wordEndIndex: 0,
+      })),
       words: [],
       phonemes: [],
     } : null)
@@ -181,6 +224,7 @@ export function useAutosave({
       ? (project.subtitleCues as Partial<SubtitleCue>[]).map(cue => ({
         id: String(cue.id ?? crypto.randomUUID()),
         narrationId: String(cue.narrationId ?? ''),
+        segmentId: typeof cue.segmentId === 'string' ? cue.segmentId : undefined,
         text: String(cue.text ?? ''),
         translation: String(cue.translation ?? ''),
         startTime: Number(cue.startTime ?? 0),
@@ -192,6 +236,7 @@ export function useAutosave({
       : legacySegments.map(s => ({
         id: crypto.randomUUID(),
         narrationId: '',
+        segmentId: s.id,
         text: s.text,
         translation: '',
         startTime: s.startTime,

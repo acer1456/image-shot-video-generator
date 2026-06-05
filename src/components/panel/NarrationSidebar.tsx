@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
 import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
-import { useheadTTS } from '@/hooks/useheadTTS'
+import { clampPauseIntensity, useheadTTS } from '@/hooks/useheadTTS'
 import { translateNarrationCues } from '@/lib/openrouter'
 
 const FONT_OPTIONS = [
@@ -17,6 +17,8 @@ const FONT_OPTIONS = [
   { value: "Impact, 'Arial Black', sans-serif", label: 'Impact（衝擊粗體）' },
   { value: "'Courier New', Courier, monospace", label: 'Courier（等寬體）' },
 ]
+
+const PAUSE_LABELS = ['關閉', '很短', '短', '自然', '明顯', '偏慢', '慢節奏']
 
 export interface NarrationSidebarProps {
   track: NarrationTrack | null
@@ -95,6 +97,7 @@ export function NarrationSidebar({
   const { generate, cancel, status, voices } = useheadTTS()
   const [voice, setVoice] = useState(track?.voice ?? 'af_heart')
   const [speed, setSpeed] = useState(track?.speed ?? 1)
+  const [pauseIntensity, setPauseIntensity] = useState(clampPauseIntensity(track?.pauseIntensity ?? 1))
   const [playing, setPlaying] = useState(false)
   const [showPrompt, setShowPrompt] = useState(() => !inputText.trim())
   const [showSubtitleStyle, setShowSubtitleStyle] = useState(false)
@@ -106,6 +109,16 @@ export function NarrationSidebar({
   const isGenerating = status.phase === 'loading' || status.phase === 'generating'
   const activeCue = subtitleCues.find(cue => cue.id === activeSubtitleId) ?? subtitleCues[0] ?? null
 
+  const releasePlaybackAudio = useCallback(() => {
+    audioRef.current?.pause()
+    audioRef.current = null
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current.url)
+      audioUrlRef.current = null
+    }
+    setPlaying(false)
+  }, [])
+
   useEffect(() => {
     if (track?.voice) setVoice(track.voice)
   }, [track?.voice])
@@ -114,16 +127,14 @@ export function NarrationSidebar({
     if (track?.speed) setSpeed(track.speed)
   }, [track?.speed])
 
+  useEffect(() => {
+    if (track?.pauseIntensity != null) setPauseIntensity(clampPauseIntensity(track.pauseIntensity))
+  }, [track?.pauseIntensity])
+
   const handleGenerate = useCallback(async () => {
     const trimmed = inputText.trim()
     if (!trimmed || isGenerating) return
-    audioRef.current?.pause()
-    audioRef.current = null
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current.url)
-      audioUrlRef.current = null
-    }
-    setPlaying(false)
+    releasePlaybackAudio()
     const shouldCreateSubtitles = subtitleCues.length === 0
     onTrackChange(null)
     if (shouldCreateSubtitles) {
@@ -131,7 +142,8 @@ export function NarrationSidebar({
       onActiveSubtitleIdChange(null)
     }
     try {
-      const result = await generate(trimmed, voice, speed)
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      const result = await generate(trimmed, voice, speed, pauseIntensity)
       onTrackChange(result.track)
       if (shouldCreateSubtitles) {
         onSubtitleCuesChange(result.subtitleCues)
@@ -141,7 +153,7 @@ export function NarrationSidebar({
     } catch {
       // useheadTTS owns the visible status text.
     }
-  }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, speed, subtitleCues.length, voice])
+  }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, pauseIntensity, releasePlaybackAudio, speed, subtitleCues.length, voice])
 
   const handlePlayPause = useCallback(() => {
     if (!track) return
@@ -173,6 +185,12 @@ export function NarrationSidebar({
       setPlaying(false)
     })
   }, [playing, track])
+
+  useEffect(() => {
+    if (!track || (audioUrlRef.current && audioUrlRef.current.trackId !== track.id)) {
+      releasePlaybackAudio()
+    }
+  }, [releasePlaybackAudio, track])
 
   useEffect(() => () => {
     audioRef.current?.pause()
@@ -367,6 +385,17 @@ export function NarrationSidebar({
               min={60} max={160} step={5}
               value={Math.round(speed * 100)}
               onChange={v => setSpeed(v / 100)}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted-foreground" title="可在旁白文字中加入 [pause 800] 指定停頓毫秒數">停頓感</label>
+              <span className="text-[10px] text-muted-foreground">{PAUSE_LABELS[pauseIntensity]}</span>
+            </div>
+            <Slider
+              min={0} max={6} step={1}
+              value={pauseIntensity}
+              onChange={v => setPauseIntensity(clampPauseIntensity(v))}
             />
           </div>
           {statusNode}

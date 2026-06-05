@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react'
-import type { NarrationPhonemeTimestamp, NarrationTrack, NarrationWordTimestamp, SubtitleCue } from '@/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { NarrationAudioSegment, NarrationPhonemeTimestamp, NarrationTrack, NarrationWordTimestamp, SubtitleCue } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { OUTPUT_W } from '@/lib/utils'
 
@@ -80,6 +80,92 @@ function wordEndsSentence(word: string) {
   return /[.!?;:]$/.test(word.trim())
 }
 
+export function clampPauseIntensity(value: number) {
+  return Math.max(0, Math.min(6, Math.round(value)))
+}
+
+const PAUSE_PRESETS = [
+  { comma: 0, sentence: 0, line: 0, paragraph: 0 },
+  { comma: 0, sentence: 120, line: 220, paragraph: 360 },
+  { comma: 60, sentence: 200, line: 360, paragraph: 560 },
+  { comma: 100, sentence: 280, line: 500, paragraph: 760 },
+  { comma: 140, sentence: 360, line: 650, paragraph: 950 },
+  { comma: 190, sentence: 470, line: 820, paragraph: 1200 },
+  { comma: 240, sentence: 600, line: 1050, paragraph: 1500 },
+]
+
+type SpeechSegment = {
+  text: string
+  pauseAfterMs: number
+}
+
+function normalizePauseMs(value: number) {
+  return Math.max(0, Math.min(5000, Math.round(value)))
+}
+
+function pushSpeechSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  const pause = normalizePauseMs(pauseAfterMs)
+  if (!normalized) {
+    const last = segments[segments.length - 1]
+    if (last) last.pauseAfterMs = Math.max(last.pauseAfterMs, pause)
+    return
+  }
+  segments.push({ text: normalized, pauseAfterMs: pause })
+}
+
+function parseNarrationSpeechSegments(text: string, pauseIntensity: number): SpeechSegment[] {
+  const preset = PAUSE_PRESETS[clampPauseIntensity(pauseIntensity)]
+  const segments: SpeechSegment[] = []
+  let buffer = ''
+
+  for (let i = 0; i < text.length; i++) {
+    const manualPause = text.slice(i).match(/^\[pause\s+(\d{1,5})\]/i)
+    if (manualPause) {
+      pushSpeechSegment(segments, buffer, Number(manualPause[1]))
+      buffer = ''
+      i += manualPause[0].length - 1
+      continue
+    }
+
+    const char = text[i]
+    if (char === '\n') {
+      let newlineCount = 1
+      while (text[i + 1] === '\n') {
+        newlineCount += 1
+        i += 1
+      }
+      const pause = newlineCount >= 2 ? preset.paragraph : preset.line
+      pushSpeechSegment(segments, buffer, pause)
+      buffer = ''
+      continue
+    }
+
+    buffer += char
+    const pause =
+      /[,:;]/.test(char) ? preset.comma :
+      /[.!?]/.test(char) ? preset.sentence :
+      0
+    const shouldSplit = pause > 0 || /[.!?]/.test(char)
+    if (shouldSplit) {
+      pushSpeechSegment(segments, buffer, pause)
+      buffer = ''
+    }
+  }
+
+  pushSpeechSegment(segments, buffer, 0)
+  if (!segments.length) {
+    const fallback = text.replace(/\s+/g, ' ').trim()
+    if (fallback) segments.push({ text: fallback, pauseAfterMs: 0 })
+  }
+  return segments
+}
+
+function createSilence(ms: number, samplingRate: number) {
+  const samples = Math.round(ms / 1000 * samplingRate)
+  return samples > 0 ? new Float32Array(samples) : null
+}
+
 let measureCtx: CanvasRenderingContext2D | null = null
 
 function getSubtitleMeasureContext() {
@@ -116,6 +202,7 @@ function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[])
     cues.push({
       id: crypto.randomUUID(),
       narrationId,
+      segmentId: first.segmentId,
       text: textWords.join(' ').replace(/\s+([,.!?;:])/g, '$1'),
       translation: '',
       startTime,
@@ -155,14 +242,18 @@ function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[])
 export function useheadTTS() {
   const headttsRef = useRef<HeadTTSInstance | null>(null)
   const connectedRef = useRef(false)
+  const generatingRef = useRef(false)
   const [status, setStatus] = useState<Status>({ phase: 'idle', message: '', progress: 0 })
 
   const releaseHeadTTS = useCallback(() => {
+    const headtts = headttsRef.current
+    headttsRef.current = null
+    connectedRef.current = false
+    if (!headtts) return
     try {
-      headttsRef.current?.clear()
-    } finally {
-      headttsRef.current = null
-      connectedRef.current = false
+      headtts.clear()
+    } catch {
+      // Best-effort cleanup; generation errors are reported by generate().
     }
   }, [])
 
@@ -204,60 +295,102 @@ export function useheadTTS() {
     return headttsRef.current
   }, [])
 
-  const generate = useCallback(async (text: string, voice: string, speed = 1): Promise<HeadTTSResult> => {
+  useEffect(() => () => {
+    releaseHeadTTS()
+  }, [releaseHeadTTS])
+
+  const generate = useCallback(async (text: string, voice: string, speed = 1, pauseIntensity = 1): Promise<HeadTTSResult> => {
+    if (generatingRef.current) throw new Error('HeadTTS 正在生成中')
+    generatingRef.current = true
     try {
       const trimmed = text.trim()
       if (!trimmed) throw new Error('請先輸入旁白內容')
+      const normalizedPauseIntensity = clampPauseIntensity(pauseIntensity)
+      const speechSegments = parseNarrationSpeechSegments(trimmed, normalizedPauseIntensity)
       setStatus({ phase: 'generating', message: '生成旁白語音…', progress: 0 })
       const headtts = await getHeadTTS(voice, speed)
-      const messages = await headtts.synthesize({
-        input: trimmed,
-        voice,
-        language: 'en-us',
-        speed,
-        audioEncoding: 'wav',
-      })
 
       const audioParts: Float32Array[] = []
+      const segments: NarrationAudioSegment[] = []
       const words: NarrationWordTimestamp[] = []
       const phonemes: NarrationPhonemeTimestamp[] = []
       let samplingRate = 24000
       let offset = 0
 
-      for (const message of messages) {
-        if (message.type === 'error') {
-          throw new Error(message.data?.error || 'HeadTTS 生成失敗')
+      for (let segmentIndex = 0; segmentIndex < speechSegments.length; segmentIndex++) {
+        const speechSegment = speechSegments[segmentIndex]
+        const segmentId = crypto.randomUUID()
+        const segmentStartTime = offset
+        const wordStartIndex = words.length
+        const messages = await headtts.synthesize({
+          input: speechSegment.text,
+          voice,
+          language: 'en-us',
+          speed,
+          audioEncoding: 'wav',
+        })
+
+        for (const message of messages) {
+          if (message.type === 'error') {
+            throw new Error(message.data?.error || 'HeadTTS 生成失敗')
+          }
+          const audio = message.data?.audio
+          if (!audio) continue
+          const channel = audio.getChannelData(0)
+          audioParts.push(new Float32Array(channel))
+          samplingRate = audio.sampleRate
+
+          const rawWords = message.data?.words ?? []
+          const wtimes = message.data?.wtimes ?? []
+          const wdurations = message.data?.wdurations ?? []
+          rawWords.forEach((word, index) => {
+            words.push({
+              word: word.trim(),
+              startTime: offset + (wtimes[index] ?? 0) / 1000,
+              duration: Math.max(0.03, (wdurations[index] ?? 80) / 1000),
+              segmentId,
+            })
+          })
+
+          const rawPhonemes = message.data?.phonemes ?? []
+          const vtimes = message.data?.vtimes ?? []
+          const vdurations = message.data?.vdurations ?? []
+          rawPhonemes.forEach((phoneme, index) => {
+            phonemes.push({
+              phoneme,
+              startTime: offset + (vtimes[index] ?? 0) / 1000,
+              duration: Math.max(0.01, (vdurations[index] ?? 40) / 1000),
+              segmentId,
+            })
+          })
+
+          offset += audio.duration
         }
-        const audio = message.data?.audio
-        if (!audio) continue
-        const channel = audio.getChannelData(0)
-        audioParts.push(new Float32Array(channel))
-        samplingRate = audio.sampleRate
 
-        const rawWords = message.data?.words ?? []
-        const wtimes = message.data?.wtimes ?? []
-        const wdurations = message.data?.wdurations ?? []
-        rawWords.forEach((word, index) => {
-          words.push({
-            word: word.trim(),
-            startTime: offset + (wtimes[index] ?? 0) / 1000,
-            duration: Math.max(0.03, (wdurations[index] ?? 80) / 1000),
+        const segmentDuration = Math.max(0, offset - segmentStartTime)
+        if (segmentDuration > 0) {
+          segments.push({
+            id: segmentId,
+            text: speechSegment.text,
+            startTime: segmentStartTime,
+            duration: segmentDuration,
+            pauseAfterMs: speechSegment.pauseAfterMs,
+            wordStartIndex,
+            wordEndIndex: words.length - 1,
           })
-        })
+        }
 
-        const rawPhonemes = message.data?.phonemes ?? []
-        const vtimes = message.data?.vtimes ?? []
-        const vdurations = message.data?.vdurations ?? []
-        rawPhonemes.forEach((phoneme, index) => {
-          phonemes.push({
-            phoneme,
-            startTime: offset + (vtimes[index] ?? 0) / 1000,
-            duration: Math.max(0.01, (vdurations[index] ?? 40) / 1000),
-          })
-        })
+        const silence = createSilence(speechSegment.pauseAfterMs, samplingRate)
+        if (silence) {
+          audioParts.push(silence)
+          offset += silence.length / samplingRate
+        }
 
-        offset += audio.duration
-        setStatus({ phase: 'generating', message: '整理字幕時間軸…', progress: Math.min(95, Math.round(offset * 10)) })
+        setStatus({
+          phase: 'generating',
+          message: `生成旁白語音… ${segmentIndex + 1}/${speechSegments.length}`,
+          progress: Math.min(95, Math.round((segmentIndex + 1) / speechSegments.length * 95)),
+        })
       }
 
       if (!audioParts.length) throw new Error('HeadTTS 沒有回傳音訊')
@@ -269,16 +402,17 @@ export function useheadTTS() {
         text: trimmed,
         voice,
         speed,
+        pauseIntensity: normalizedPauseIntensity,
         startTime: 0,
         duration: audioData.length / samplingRate,
         audioData,
         samplingRate,
+        segments,
         words,
         phonemes,
       }
 
       const subtitleCues = buildSubtitleCues(narrationId, words)
-      releaseHeadTTS()
       setStatus({ phase: 'idle', message: '', progress: 100 })
       return { track, subtitleCues }
     } catch (error) {
@@ -286,10 +420,13 @@ export function useheadTTS() {
       const message = error instanceof Error ? error.message : 'HeadTTS 生成失敗'
       setStatus({ phase: 'error', message, progress: 0 })
       throw error
+    } finally {
+      generatingRef.current = false
     }
   }, [getHeadTTS, releaseHeadTTS])
 
   const cancel = useCallback(() => {
+    generatingRef.current = false
     releaseHeadTTS()
     setStatus({ phase: 'idle', message: '', progress: 0 })
   }, [releaseHeadTTS])

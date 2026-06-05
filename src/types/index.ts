@@ -103,12 +103,24 @@ export interface NarrationWordTimestamp {
   word: string
   startTime: number
   duration: number
+  segmentId?: string
 }
 
 export interface NarrationPhonemeTimestamp {
   phoneme: string
   startTime: number
   duration: number
+  segmentId?: string
+}
+
+export interface NarrationAudioSegment {
+  id: string
+  text: string
+  startTime: number
+  duration: number
+  pauseAfterMs: number
+  wordStartIndex: number
+  wordEndIndex: number
 }
 
 export interface NarrationTrack {
@@ -116,10 +128,12 @@ export interface NarrationTrack {
   text: string
   voice: string
   speed: number
+  pauseIntensity: number
   startTime: number
   duration: number
   audioData?: Float32Array
   samplingRate?: number
+  segments: NarrationAudioSegment[]
   words: NarrationWordTimestamp[]
   phonemes: NarrationPhonemeTimestamp[]
 }
@@ -136,6 +150,7 @@ export interface SubtitleStyle {
 export interface SubtitleCue {
   id: string
   narrationId: string
+  segmentId?: string
   text: string
   translation: string
   startTime: number
