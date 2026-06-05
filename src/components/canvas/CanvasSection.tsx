@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import CanvasEditor from '@/components/CanvasEditor'
+import CanvasEditor from '@/components/canvas/CanvasEditor'
 import { Switch } from '@/components/ui/switch'
 import { Hand, Maximize2 } from 'lucide-react'
 import type { ActiveTab, SafeAreaVisibility } from '@/types'

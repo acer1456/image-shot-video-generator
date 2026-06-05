@@ -149,15 +149,3 @@ export function wrapText(
   ctx.restore()
   return result
 }
-
-export function getBestVideoMimeType() {
-  const candidates = [
-    'video/mp4;codecs=h264,aac',
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-    'video/mp4',
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm'
-  ]
-  return candidates.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm'
-}

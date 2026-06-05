@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import CameraPanel from '@/components/CameraPanel'
+import CameraPanel from '@/components/panel/CameraPanel'
 import CaptionEditor from '@/components/CaptionEditor'
-import AssistPanel from '@/components/AssistPanel'
+import AssistPanel from '@/components/panel/AssistPanel'
 import { Settings, ChevronLeft, Sparkles, X } from 'lucide-react'
 import type { CameraPoint, CaptionData, ActiveTab, BackgroundSettings } from '@/types'
 

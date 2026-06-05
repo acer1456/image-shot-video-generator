@@ -1,26 +1,26 @@
-import { Converter } from 'opencc-js'
 import type { CameraPoint } from '@/types'
 
 export type ChineseConversion = 'original' | 'tw' | 'cn'
 
-let _twConv: ((s: string) => string) | null = null
-let _cnConv: ((s: string) => string) | null = null
+let _twConv: Promise<(s: string) => string> | null = null
+let _cnConv: Promise<(s: string) => string> | null = null
 
 function getTwConv() {
-  return _twConv ?? (_twConv = Converter({ from: 'cn', to: 'tw' }))
+  return _twConv ?? (_twConv = import('opencc-js/cn2t').then(({ Converter }) => Converter({ from: 'cn', to: 'tw' })))
 }
 
 function getCnConv() {
-  return _cnConv ?? (_cnConv = Converter({ from: 'tw', to: 'cn' }))
+  return _cnConv ?? (_cnConv = import('opencc-js/t2cn').then(({ Converter }) => Converter({ from: 'tw', to: 'cn' })))
 }
 
-export function convertChinese(text: string, mode: 'tw' | 'cn'): string {
+export async function convertChinese(text: string, mode: 'tw' | 'cn'): Promise<string> {
   if (!text) return text
-  return mode === 'tw' ? getTwConv()(text) : getCnConv()(text)
+  const conv = mode === 'tw' ? await getTwConv() : await getCnConv()
+  return conv(text)
 }
 
-export function convertPointsCaptions(points: CameraPoint[], mode: 'tw' | 'cn'): CameraPoint[] {
-  const conv = (s: string) => convertChinese(s, mode)
+export async function convertPointsCaptions(points: CameraPoint[], mode: 'tw' | 'cn'): Promise<CameraPoint[]> {
+  const conv = mode === 'tw' ? await getTwConv() : await getCnConv()
   return points.map(p => ({
     ...p,
     caption: {

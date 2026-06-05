@@ -1,10 +1,47 @@
 import { useCallback, useState } from 'react'
-import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
-import type { CameraPoint, ActiveTab } from '@/types'
+import type { Dispatch, SetStateAction } from 'react'
+import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
+import type { CameraPoint, ActiveTab, NarrationSegment, SubtitleStyle } from '@/types'
+import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName, sanitizeFileName, getTodayString } from '@/lib/utils'
 
-export function useProjectIO(triggerRedraw: () => void) {
-  const store = useAppStore()
+interface UseProjectIOOptions {
+  narrationInputText: string
+  narrationSegments: NarrationSegment[]
+  subtitleStyle: SubtitleStyle
+  setNarrationInputText: Dispatch<SetStateAction<string>>
+  setNarrationSegments: Dispatch<SetStateAction<NarrationSegment[]>>
+  setSubtitleStyle: Dispatch<SetStateAction<SubtitleStyle>>
+}
+
+function normalizeSubtitleStyle(value: unknown): SubtitleStyle {
+  if (!value || typeof value !== 'object') return DEFAULT_SUBTITLE_STYLE
+  const s = value as Record<string, unknown>
+  return {
+    fontFamily: typeof s.fontFamily === 'string' ? s.fontFamily : DEFAULT_SUBTITLE_STYLE.fontFamily,
+    fontSizeRatio: typeof s.fontSizeRatio === 'number' ? s.fontSizeRatio : DEFAULT_SUBTITLE_STYLE.fontSizeRatio,
+    shadowEnabled: typeof s.shadowEnabled === 'boolean' ? s.shadowEnabled : DEFAULT_SUBTITLE_STYLE.shadowEnabled,
+    shadowBlur: typeof s.shadowBlur === 'number' ? s.shadowBlur : DEFAULT_SUBTITLE_STYLE.shadowBlur,
+    shadowOpacity: typeof s.shadowOpacity === 'number' ? s.shadowOpacity : DEFAULT_SUBTITLE_STYLE.shadowOpacity,
+    subtitlePosition: s.subtitlePosition && typeof (s.subtitlePosition as Record<string, unknown>).x === 'number'
+      ? s.subtitlePosition as { x: number; y: number }
+      : DEFAULT_SUBTITLE_STYLE.subtitlePosition,
+  }
+}
+
+function normalizeNarrationSegments(value: unknown): NarrationSegment[] {
+  if (!Array.isArray(value)) return []
+  return (value as Partial<NarrationSegment>[]).map(s => ({
+    id: String(s.id ?? crypto.randomUUID()),
+    text: String(s.text ?? ''),
+    startTime: Number(s.startTime ?? 0),
+    duration: Number(s.duration ?? 0),
+    samplingRate: s.samplingRate != null ? Number(s.samplingRate) : undefined,
+    audioData: undefined,
+  }))
+}
+
+export function useProjectIO(store: AppStore, triggerRedraw: () => void, options?: UseProjectIOOptions) {
   const [loadingPainting, setLoadingPainting] = useState(false)
 
   /** 從 URL 載入畫作到 canvas（名畫庫使用） */
@@ -57,6 +94,9 @@ export function useProjectIO(triggerRedraw: () => void) {
         activeIndex: store.activeIndex,
         activeTab: store.activeTab,
         points: store.points,
+        narrationInputText: options?.narrationInputText ?? '',
+        narrationSegments: (options?.narrationSegments ?? []).map(({ id, text, startTime, duration, samplingRate }) => ({ id, text, startTime, duration, samplingRate })),
+        subtitleStyle: options?.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE,
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -65,7 +105,7 @@ export function useProjectIO(triggerRedraw: () => void) {
       document.body.appendChild(a); a.click(); a.remove()
       URL.revokeObjectURL(url)
     } catch (err) { console.error(err); alert('保存失敗') }
-  }, [store])
+  }, [store, options])
 
   const loadProject = useCallback(async (file: File) => {
     try {
@@ -85,10 +125,13 @@ export function useProjectIO(triggerRedraw: () => void) {
       store.setActiveIndex(ai)
       const tab: ActiveTab = ['camera', 'caption', 'assist'].includes(project.activeTab) ? project.activeTab : 'camera'
       store.setActiveTab(tab)
+      options?.setNarrationInputText(typeof project.narrationInputText === 'string' ? project.narrationInputText : '')
+      options?.setNarrationSegments(normalizeNarrationSegments(project.narrationSegments))
+      options?.setSubtitleStyle(normalizeSubtitleStyle(project.subtitleStyle))
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }
-  }, [store, triggerRedraw])
+  }, [store, triggerRedraw, options])
 
   return { loadingPainting, loadImageFromUrl, saveProject, loadProject }
 }

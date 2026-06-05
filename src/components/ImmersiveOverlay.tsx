@@ -1,4 +1,4 @@
-import CanvasEditor from '@/components/CanvasEditor'
+import CanvasEditor from '@/components/canvas/CanvasEditor'
 import { X } from 'lucide-react'
 
 type CanvasEditorProps = React.ComponentPropsWithoutRef<typeof CanvasEditor>

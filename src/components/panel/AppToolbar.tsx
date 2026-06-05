@@ -1,8 +1,9 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
   Maximize, Upload, ChevronDown, Sparkles, Palette, Loader2,
@@ -10,6 +11,7 @@ import {
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
+import type { VideoRenderMethod } from '@/hooks/useVideoRender'
 
 interface AppToolbarProps {
   isDisabled: boolean
@@ -26,7 +28,7 @@ interface AppToolbarProps {
   onLoadFile: (file: File) => void
   onOpenMasterworkPicker: () => void
   onOpenAiPanel: () => void
-  onRenderVideo: (conv: ChineseConversion) => void
+  onRenderVideo: (conv: ChineseConversion, method: VideoRenderMethod) => void
   onSave: () => void
   onClearPoints: () => void
   onRequestFullscreen: () => void
@@ -41,6 +43,11 @@ export function AppToolbar({
   onSave, onClearPoints, onRequestFullscreen,
 }: AppToolbarProps) {
   const { theme, setTheme } = useTheme()
+  const [renderMethod, setRenderMethod] = useState<VideoRenderMethod>('mediaRecorder')
+  const supportsWebCodecs =
+    typeof window !== 'undefined' &&
+    'VideoEncoder' in window &&
+    'VideoFrame' in window
 
   return (
     <header className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm flex-shrink-0">
@@ -98,7 +105,7 @@ export function AppToolbar({
         <DropdownMenuPrimitive.Trigger asChild>
           <Button size="sm" disabled={isDisabled || !hasImage || !hasPoints}>
             <Film className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">下載 MP4</span>
+            <span className="hidden sm:inline">下載影片</span>
             <ChevronDown className="h-3 w-3 ml-0.5" />
           </Button>
         </DropdownMenuPrimitive.Trigger>
@@ -106,23 +113,46 @@ export function AppToolbar({
           <DropdownMenuPrimitive.Content
             align="end"
             sideOffset={4}
-            className="z-50 min-w-[170px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
+            className="z-50 min-w-[230px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
           >
+            <div className="flex items-center justify-between gap-3 rounded px-3 py-2">
+              <div className="flex flex-col leading-tight">
+                <span className="text-xs font-medium">輸出方法</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {renderMethod === 'webCodecs' ? 'WebCodecs' : 'MediaRecorder'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground">MR</span>
+                <Switch
+                  checked={renderMethod === 'webCodecs'}
+                  disabled={!supportsWebCodecs || isRendering}
+                  onCheckedChange={checked => setRenderMethod(checked ? 'webCodecs' : 'mediaRecorder')}
+                />
+                <span className="text-[10px] text-muted-foreground">WC</span>
+              </div>
+            </div>
+            {!supportsWebCodecs && (
+              <div className="px-3 pb-2 text-[10px] text-muted-foreground">
+                此瀏覽器不支援 WebCodecs
+              </div>
+            )}
+            <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
             <DropdownMenuPrimitive.Item
               className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-              onSelect={() => onRenderVideo('original')}
+              onSelect={() => onRenderVideo('original', renderMethod)}
             >
               下載此版本影片
             </DropdownMenuPrimitive.Item>
             <DropdownMenuPrimitive.Item
               className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-              onSelect={() => onRenderVideo('tw')}
+              onSelect={() => onRenderVideo('tw', renderMethod)}
             >
               下載繁體中文影片
             </DropdownMenuPrimitive.Item>
             <DropdownMenuPrimitive.Item
               className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
-              onSelect={() => onRenderVideo('cn')}
+              onSelect={() => onRenderVideo('cn', renderMethod)}
             >
               下載簡體中文影片
             </DropdownMenuPrimitive.Item>
