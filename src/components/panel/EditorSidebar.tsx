@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import CameraPanel from '@/components/panel/CameraPanel'
 import CaptionEditor from '@/components/CaptionEditor'
 import AssistPanel from '@/components/panel/AssistPanel'
-import { Settings, ChevronLeft, Sparkles, X } from 'lucide-react'
+import { Settings, ChevronLeft, ChevronRight, Sparkles, X } from 'lucide-react'
 import type { CameraPoint, CaptionData, ActiveTab, BackgroundSettings } from '@/types'
 
 export interface EditorSidebarHandlers {
@@ -39,25 +39,52 @@ interface EditorSidebarProps {
   activeCaptionIndex: number
   image: HTMLImageElement | null
   backgroundSettings: BackgroundSettings
+  collapsed: boolean
+  onToggleCollapse: () => void
   handlers: EditorSidebarHandlers
 }
 
 export function EditorSidebar({
   points, activeIndex, activeTab, activePoint, activeCaptionIndex,
-  image, backgroundSettings,
+  image, backgroundSettings, collapsed, onToggleCollapse,
   handlers,
 }: EditorSidebarProps) {
   const hasImage = !!image
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
+  if (collapsed) {
+    return (
+      <div
+        className="flex-shrink-0 rounded-xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
+        style={{ width: 36 }}
+        onClick={onToggleCollapse}
+        title="展開鏡頭面板"
+      >
+        <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+        <span
+          className="text-[11px] font-semibold text-muted-foreground"
+          style={{ writingMode: 'vertical-rl', textOrientation: 'upright', letterSpacing: 2 }}
+        >
+          鏡頭
+        </span>
+        <Settings className="h-4 w-4 text-muted-foreground" />
+      </div>
+    )
+  }
+
   return (
     <>
       <aside className="w-96 flex-shrink-0 rounded-xl border border-border bg-card overflow-y-auto">
         <div className="p-4 border-b border-border flex items-center justify-between">
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="收合鏡頭面板" onClick={onToggleCollapse}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
           <h2 className="text-base font-bold">{activeIndex >= 0 ? `目前鏡頭： ${activeIndex + 1}` : '目前未選擇鏡頭'}</h2>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="輸出設定" onClick={() => setIsSettingsOpen(true)}>
-            <Settings className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="輸出設定" onClick={() => setIsSettingsOpen(true)}>
+              <Settings className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="p-4">

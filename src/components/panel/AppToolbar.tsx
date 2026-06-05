@@ -12,6 +12,9 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
 import type { VideoRenderMethod } from '@/hooks/useVideoRender'
+import ScreenDownload from '@/components/ScreenDownload'
+import type { BackgroundSettings, CameraPoint } from '@/types'
+
 
 interface AppToolbarProps {
   isDisabled: boolean
@@ -20,6 +23,9 @@ interface AppToolbarProps {
   renderProgress: number
   hasImage: boolean
   hasPoints: boolean
+  image: HTMLImageElement | null
+  points: CameraPoint[]
+  backgroundSettings: BackgroundSettings
   projectName: string
   fileInputRef: React.RefObject<HTMLInputElement>
   loadProjectInputRef: React.RefObject<HTMLInputElement>
@@ -36,7 +42,7 @@ interface AppToolbarProps {
 
 export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
-  hasImage, hasPoints, projectName,
+  hasImage, hasPoints, image, points, backgroundSettings, projectName,
   fileInputRef, loadProjectInputRef,
   onProjectNameChange, onImageFile, onLoadFile,
   onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
@@ -159,6 +165,14 @@ export function AppToolbar({
           </DropdownMenuPrimitive.Content>
         </DropdownMenuPrimitive.Portal>
       </DropdownMenuPrimitive.Root>
+
+      <ScreenDownload
+        image={image}
+        points={points}
+        backgroundSettings={backgroundSettings}
+        projectName={projectName}
+        disabled={isDisabled || isRendering}
+      />
 
       {/* Render progress bar */}
       {isRendering && (

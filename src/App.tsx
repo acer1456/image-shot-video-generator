@@ -54,6 +54,7 @@ function AppInner() {
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
   const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
+  const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
@@ -430,6 +431,9 @@ function AppInner() {
         renderProgress={renderProgress}
         hasImage={!!store.image}
         hasPoints={!!store.points.length}
+        image={store.image}
+        points={store.points}
+        backgroundSettings={store.backgroundSettings}
         projectName={store.projectName}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
@@ -488,6 +492,8 @@ function AppInner() {
             activeCaptionIndex={activeCaptionIndex}
             image={store.image}
             backgroundSettings={store.backgroundSettings}
+            collapsed={isEditorSidebarCollapsed}
+            onToggleCollapse={() => setIsEditorSidebarCollapsed(v => !v)}
             handlers={{
               onSelect: selectPointAndSyncTimeline,
               onRemovePoint: i => { store.removePoint(i, store.points, store.activeIndex); triggerRedraw() },
