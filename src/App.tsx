@@ -8,6 +8,7 @@ import TimelinePanel from '@/components/TimelinePanel'
 import type { TimelinePanelHandle } from '@/components/TimelinePanel'
 import AiGeneratePanel from '@/components/AiGeneratePanel'
 import { MasterworkPickerModal } from '@/components/MasterworkPickerModal'
+import ScreenDownload from '@/components/screenDownload'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -668,6 +669,14 @@ function AppInner() {
             </DropdownMenuPrimitive.Content>
           </DropdownMenuPrimitive.Portal>
         </DropdownMenuPrimitive.Root>
+
+        <ScreenDownload
+          image={store.image}
+          points={store.points}
+          backgroundSettings={store.backgroundSettings}
+          projectName={store.projectName}
+          disabled={isDisabled || store.isRendering}
+        />
 
         {store.isRendering && (
           <div className="flex items-center gap-1.5 ml-2">
