@@ -21,6 +21,7 @@ interface CanvasEditorProps {
   onlyActiveBox: boolean
   showCaptionBox: boolean
   showGuidesInPreview: boolean
+  showCameraCaptionsInOutput: boolean
   isRendering: boolean
   isPreviewing: boolean
   onPointAdd: (x: number, y: number) => void
@@ -50,7 +51,7 @@ interface CanvasEditorProps {
 export default function CanvasEditor({
   image, points, activeIndex, activeTab,
   backgroundSettings, safeAreaVisibility,
-  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
+  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput,
   isRendering, isPreviewing,
   onPointAdd, onPointMove, onPointResize, onPointSelect,
   onCaptionMove, onCaptionFontResize, onCaptionBoxWidth, onCaptionBoxHeight,
@@ -104,7 +105,8 @@ export default function CanvasEditor({
 
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
       const camera = getCameraForPoint(image, points[activeIndex])
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, points[activeIndex], showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle)
+      const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
+      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle)
       if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
       return
     }
@@ -115,7 +117,7 @@ export default function CanvasEditor({
     ctx.drawImage(image, r.x, r.y, r.w, r.h)
 
     if (showGuides) drawEditorGuides(canvas, ctx)
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle])
+  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle])
 
   const drawEditorGuides = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
     if (!image || !points.length) return

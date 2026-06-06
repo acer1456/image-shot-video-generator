@@ -10,7 +10,6 @@ import { getActiveSubtitleCue, getSubtitleRenderText } from '@/lib/narration'
 export type VideoRenderMethod = 'mediaRecorder' | 'webCodecs'
 
 const RENDER_FPS = 30
-const FRAME_MS = Math.ceil(1000 / RENDER_FPS)
 const FRAME_DURATION_US = Math.round(1_000_000 / RENDER_FPS)
 const WEB_CODECS_MAX_QUEUE_SIZE = 2
 const OPUS_FRAME_MS = 20
@@ -21,6 +20,8 @@ interface UseVideoRenderOptions {
   triggerRedraw: () => void
   narrationTrack: NarrationTrack | null
   subtitleCues: SubtitleCue[]
+  showNarration: boolean
+  showCameraCaptions: boolean
 }
 
 function getBestMediaRecorderMimeType() {
@@ -79,6 +80,8 @@ export function useVideoRender({
   triggerRedraw,
   narrationTrack,
   subtitleCues,
+  showNarration,
+  showCameraCaptions,
 }: UseVideoRenderOptions) {
   const [renderProgress, setRenderProgress] = useState(0)
 
@@ -93,11 +96,14 @@ export function useVideoRender({
       const renderPoints = captionConversion === 'original'
         ? store.points
         : await convertPointsCaptions(store.points, captionConversion)
-      const renderSubtitleCues = captionConversion === 'original'
+      const renderSubtitleCues = !showNarration
+        ? []
+        : captionConversion === 'original'
         ? subtitleCues
         : await convertSubtitleCues(subtitleCues, captionConversion)
       const { totalDuration: td } = buildTimeline(renderPoints)
-      const narrationEnd = narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
+      const renderNarrationTrack = showNarration ? narrationTrack : null
+      const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + renderNarrationTrack.duration : 0
       const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       const renderDuration = Math.max(td, narrationEnd, subtitleEnd)
       const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
@@ -123,16 +129,17 @@ export function useVideoRender({
         if (!state) return
         const cue = getActiveSubtitleCue(renderSubtitleCues, t)
         const narText = getSubtitleRenderText(cue) || undefined
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+        const captionPoint = showCameraCaptions ? state.captionPoint : null
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
         if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, state.captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
         }
       }
 
       setRenderProgress(0)
       const { blob, mimeType } = method === 'mediaRecorder'
-        ? await renderWithMediaRecorder(off, drawFrame, renderDuration, totalFrames, setRenderProgress, narrationTrack)
-        : await renderWithWebCodecs(off, drawFrame, renderDuration, totalFrames, setRenderProgress, narrationTrack)
+        ? await renderWithMediaRecorder(off, drawFrame, renderDuration, totalFrames, setRenderProgress, renderNarrationTrack)
+        : await renderWithWebCodecs(off, drawFrame, renderDuration, totalFrames, setRenderProgress, renderNarrationTrack)
       if (store.lastVideoUrl) URL.revokeObjectURL(store.lastVideoUrl)
       const url = URL.createObjectURL(blob)
       store.setLastVideoUrl(url)
@@ -149,7 +156,7 @@ export function useVideoRender({
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues])
+  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues, showNarration, showCameraCaptions])
 
   return { renderVideo, renderProgress }
 }
@@ -162,6 +169,8 @@ async function renderWithMediaRecorder(
   setRenderProgress: (progress: number) => void,
   narrationTrack: NarrationTrack | null,
 ) {
+  const frameIntervalMs = 1000 / RENDER_FPS
+  const startDelayMs = 100
   // captureStream(0) = manual frame mode: frames are only captured when
   // requestFrame() is explicitly called. This is necessary for offscreen
   // canvases because the browser's compositor never visits them, so
@@ -188,18 +197,34 @@ async function renderWithMediaRecorder(
       recorder.onerror = (e: Event) => reject(new Error('MediaRecorder: ' + ((e as any).error?.message ?? 'unknown error')))
     })
     recorder.start()
+    const wallStart = performance.now() + startDelayMs
     if (narrationAudio) {
       const delay = Math.max(0, narrationTrack!.startTime)
-      narrationAudio.source.start(narrationAudio.audioCtx.currentTime + delay)
+      narrationAudio.source.start(narrationAudio.audioCtx.currentTime + startDelayMs / 1000 + delay)
     }
 
-    // Fixed-step render: t = frame / FPS — each frame is explicitly pushed to the
-    // stream via requestFrame(), ensuring reliable capture for offscreen canvases.
-    for (let frame = 0; frame < totalFrames; frame++) {
-      drawFrame(Math.min(frame / RENDER_FPS, totalDuration))
+    // MediaRecorder timestamps frames using real capture time, so draw from the
+    // same wall clock as AudioContext. Absolute deadlines prevent per-frame timer
+    // and drawing costs from accumulating into subtitle/audio drift.
+    let frame = 0
+    while (true) {
+      const targetTime = wallStart + frame * frameIntervalMs
+      const waitMs = targetTime - performance.now()
+      if (waitMs > 0) await wait(waitMs)
+
+      const elapsed = Math.min(
+        totalDuration,
+        Math.max(0, (performance.now() - wallStart) / 1000),
+      )
+      drawFrame(elapsed)
       captureTrack.requestFrame?.()
-      reportProgress(frame, totalFrames)
-      if (frame < totalFrames - 1) await wait(FRAME_MS)
+      reportProgress(Math.min(totalFrames - 1, Math.floor(elapsed * RENDER_FPS)), totalFrames)
+      if (elapsed >= totalDuration) break
+
+      // Skip nominal frames that are already in the past instead of rendering
+      // them late with stale subtitle timestamps.
+      const currentFrame = Math.floor(elapsed * RENDER_FPS)
+      frame = Math.max(frame + 1, currentFrame + 1)
     }
 
     // Give the stream enough time to capture the final frame before stopping.

@@ -77,6 +77,8 @@ export function useAppStore() {
   const [onlyActiveBox, setOnlyActiveBox] = useState(true)
   const [showCaptionBox, setShowCaptionBox] = useState(true)
   const [showGuidesInPreview, setShowGuidesInPreview] = useState(false)
+  const [showNarrationInOutput, setShowNarrationInOutput] = useState(true)
+  const [showCameraCaptionsInOutput, setShowCameraCaptionsInOutput] = useState(true)
   const [lastCaptionStyle, setLastCaptionStyle] = useState<Partial<CaptionData> | null>(null)
   const [lastCameraSettings, setLastCameraSettings] = useState<Partial<CameraPoint> | null>(null)
   const [lastVideoUrl, setLastVideoUrl] = useState<string | null>(null)
@@ -283,6 +285,8 @@ export function useAppStore() {
     onlyActiveBox, setOnlyActiveBox,
     showCaptionBox, setShowCaptionBox,
     showGuidesInPreview, setShowGuidesInPreview,
+    showNarrationInOutput, setShowNarrationInOutput,
+    showCameraCaptionsInOutput, setShowCameraCaptionsInOutput,
     lastCaptionStyle, setLastCaptionStyle,
     lastCameraSettings, setLastCameraSettings,
     lastVideoUrl, setLastVideoUrl,

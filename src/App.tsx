@@ -97,10 +97,12 @@ function AppInner() {
   // Sync total duration whenever points or narration timeline content changes
   useEffect(() => {
     const { totalDuration: td } = buildTimeline(store.points)
-    const narrationEnd = narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
-    const subtitleEnd = subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
+    const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
+    const subtitleEnd = store.showNarrationInOutput
+      ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
+      : 0
     setTotalDuration(Math.max(td, narrationEnd, subtitleEnd))
-  }, [store.points, narrationTrack, subtitleCues])
+  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -116,6 +118,8 @@ function AppInner() {
     triggerRedraw,
     narrationTrack,
     subtitleCues,
+    showNarration: store.showNarrationInOutput,
+    showCameraCaptions: store.showCameraCaptionsInOutput,
   })
 
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
@@ -126,9 +130,10 @@ function AppInner() {
     const state = getTimelineStateAt(store.image, store.points, time)
     if (!state) return
     store.setActiveIndex(state.pointIndex)
-    const cue = getActiveSubtitleCue(subtitleCues, time)
+    const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
     const narrationText = getSubtitleRenderText(cue)
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, state.captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style)
+    const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style)
   }, [getCanvas, store, snapGuide, subtitleCues])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
@@ -167,7 +172,11 @@ function AppInner() {
     // Start from current cursor position (not always from 0)
     const startTime = currentTimeRef.current >= totalDuration ? 0 : currentTimeRef.current
     // Schedule narration audio from the start position
-    scheduleNarrationAudio(narrationTrack, startTime, audioCtxRef, narrationSourcesRef)
+    if (store.showNarrationInOutput) {
+      scheduleNarrationAudio(narrationTrack, startTime, audioCtxRef, narrationSourcesRef)
+    } else {
+      stopNarrationAudio(narrationSourcesRef)
+    }
     const wallStart = performance.now()
     while (true) {
       if (previewCancelRef.current) break
@@ -388,8 +397,8 @@ function AppInner() {
   // ---------- Render ----------
   const activePoint = store.points[store.activeIndex] || null
   const isDisabled = store.isRendering
-  const activeSubtitleCue = subtitleCues.find(cue => cue.id === activeSubtitleId) ?? null
-  const currentSubtitleCue = activeSubtitleCue ?? getActiveSubtitleCue(subtitleCues, currentTimeRef.current)
+  const activeSubtitleCue = store.showNarrationInOutput ? subtitleCues.find(cue => cue.id === activeSubtitleId) ?? null : null
+  const currentSubtitleCue = activeSubtitleCue ?? (store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, currentTimeRef.current) : null)
   const updateActiveSubtitleStyle = (pos: { x: number; y: number }) => {
     if (!currentSubtitleCue) return
     setSubtitleCues(cues => cues.map(cue =>
@@ -410,6 +419,7 @@ function AppInner() {
     onlyActiveBox: store.onlyActiveBox,
     showCaptionBox: store.showCaptionBox,
     showGuidesInPreview: store.showGuidesInPreview,
+    showCameraCaptionsInOutput: store.showCameraCaptionsInOutput,
     isRendering: store.isRendering,
     isPreviewing: store.isPreviewing,
     onPointAdd: handlePointAdd,
@@ -486,11 +496,18 @@ function AppInner() {
             onlyActiveBox={store.onlyActiveBox}
             showCaptionBox={store.showCaptionBox}
             showGuidesInPreview={store.showGuidesInPreview}
+            showNarrationInOutput={store.showNarrationInOutput}
+            showCameraCaptionsInOutput={store.showCameraCaptionsInOutput}
             onToggle={(key, val) => {
               if (key === 'showAllPoints') store.setShowAllPoints(val)
               else if (key === 'onlyActiveBox') store.setOnlyActiveBox(val)
               else if (key === 'showCaptionBox') store.setShowCaptionBox(val)
               else if (key === 'showGuidesInPreview') store.setShowGuidesInPreview(val)
+              else if (key === 'showNarrationInOutput') {
+                store.setShowNarrationInOutput(val)
+                if (!val) stopNarrationAudio(narrationSourcesRef)
+              }
+              else if (key === 'showCameraCaptionsInOutput') store.setShowCameraCaptionsInOutput(val)
               triggerRedraw()
             }}
             safeAreaVisibility={store.safeAreaVisibility}

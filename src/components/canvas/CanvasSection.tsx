@@ -16,7 +16,18 @@ interface CanvasSectionProps {
   onlyActiveBox: boolean
   showCaptionBox: boolean
   showGuidesInPreview: boolean
-  onToggle: (key: 'showAllPoints' | 'onlyActiveBox' | 'showCaptionBox' | 'showGuidesInPreview', val: boolean) => void
+  showNarrationInOutput: boolean
+  showCameraCaptionsInOutput: boolean
+  onToggle: (
+    key:
+      | 'showAllPoints'
+      | 'onlyActiveBox'
+      | 'showCaptionBox'
+      | 'showGuidesInPreview'
+      | 'showNarrationInOutput'
+      | 'showCameraCaptionsInOutput',
+    val: boolean
+  ) => void
   safeAreaVisibility: SafeAreaVisibility
   onSafeAreaChange: (key: keyof SafeAreaVisibility, val: boolean) => void
   canvasEditorProps: CanvasEditorProps
@@ -25,7 +36,8 @@ interface CanvasSectionProps {
 export function CanvasSection({
   isDisabled, hasImage, activeTab, onTabChange,
   onOpenImmersiveMode,
-  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, onToggle,
+  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
+  showNarrationInOutput, showCameraCaptionsInOutput, onToggle,
   safeAreaVisibility, onSafeAreaChange,
   canvasEditorProps,
 }: CanvasSectionProps) {
@@ -85,6 +97,18 @@ export function CanvasSection({
               disabled={isDisabled || !hasImage}
             />
             <span className={`text-xs transition-colors ${activeTab === 'caption' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>字幕</span>
+          </label>
+        </div>
+
+        <div className="absolute top-14 left-2 z-10 flex flex-col gap-2 p-2.5 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 min-w-[132px]">
+          <p className="text-[9px] font-semibold text-secondary-foreground text-center">輸出內容</p>
+          <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+            <span className="text-xs">旁白字幕</span>
+            <Switch checked={showNarrationInOutput} onCheckedChange={v => onToggle('showNarrationInOutput', v)} />
+          </label>
+          <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+            <span className="text-xs">鏡頭字幕</span>
+            <Switch checked={showCameraCaptionsInOutput} onCheckedChange={v => onToggle('showCameraCaptionsInOutput', v)} />
           </label>
         </div>
 
