@@ -188,7 +188,7 @@ function fitsSubtitleWidth(text: string) {
 
 function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[]): SubtitleCue[] {
   const cues: SubtitleCue[] = []
-  const maxWords = 6
+  const maxWords = 3.5
   const maxDuration = 3.2
   let startIndex = 0
   let textWords: string[] = []
