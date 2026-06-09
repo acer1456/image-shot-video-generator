@@ -6,6 +6,53 @@ import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clamp, normalizeProjectName } from '@/lib/utils'
 
 const AUTOSAVE_KEY = 'artful_autosave'
+const AUTOSAVE_DB_NAME = 'artful_autosave_assets'
+const AUTOSAVE_DB_VERSION = 1
+const AUTOSAVE_IMAGE_STORE = 'images'
+const AUTOSAVE_IMAGE_KEY = 'current'
+
+function openAutosaveDb() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(AUTOSAVE_DB_NAME, AUTOSAVE_DB_VERSION)
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(AUTOSAVE_IMAGE_STORE)) {
+        request.result.createObjectStore(AUTOSAVE_IMAGE_STORE)
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function useAutosaveImageStore<T>(
+  mode: IDBTransactionMode,
+  operation: (store: IDBObjectStore) => IDBRequest<T>,
+) {
+  const db = await openAutosaveDb()
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const transaction = db.transaction(AUTOSAVE_IMAGE_STORE, mode)
+      const request = operation(transaction.objectStore(AUTOSAVE_IMAGE_STORE))
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
+function saveAutosaveImage(blob: Blob) {
+  return useAutosaveImageStore('readwrite', store => store.put(blob, AUTOSAVE_IMAGE_KEY))
+}
+
+function loadAutosaveImage() {
+  return useAutosaveImageStore<Blob | undefined>('readonly', store => store.get(AUTOSAVE_IMAGE_KEY))
+}
+
+function deleteAutosaveImage() {
+  return useAutosaveImageStore('readwrite', store => store.delete(AUTOSAVE_IMAGE_KEY))
+}
 
 interface UseAutosaveOptions {
   store: AppStore
@@ -101,21 +148,33 @@ export function useAutosave({
   }, [])
 
   useEffect(() => {
+    if (!store.image?.src) return
+    let cancelled = false
+    void fetch(store.image.src)
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.blob()
+      })
+      .then(blob => {
+        if (!cancelled) return saveAutosaveImage(blob)
+      })
+      .catch(err => console.warn('[autosave image]', err))
+    return () => { cancelled = true }
+  }, [store.image])
+
+  useEffect(() => {
     if (!store.points.length && !store.image) return
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
     autosaveTimerRef.current = setTimeout(() => {
       try {
-        let imageDataUrl: string | null = null
-        if (store.image) {
-          const tmp = document.createElement('canvas')
-          tmp.width = store.image.width; tmp.height = store.image.height
-          tmp.getContext('2d')!.drawImage(store.image, 0, 0)
-          imageDataUrl = tmp.toDataURL('image/jpeg', 0.7)
-        }
         const data = {
-          app: 'auto-art-camera-tour', version: 1,
+          app: 'auto-art-camera-tour', version: 2,
           name: store.projectName, savedAt: new Date().toISOString(),
-          image: imageDataUrl ? { dataUrl: imageDataUrl, width: store.image!.width, height: store.image!.height } : null,
+          image: store.image ? {
+            storage: 'indexeddb',
+            width: store.image.width,
+            height: store.image.height,
+          } : null,
           backgroundSettings: store.backgroundSettings,
           activeIndex: store.activeIndex, activeTab: store.activeTab,
           points: store.points,
@@ -135,11 +194,7 @@ export function useAutosave({
           } : null,
           subtitleCues,
         }
-        try {
-          localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
-        } catch {
-          localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ ...data, image: null }))
-        }
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
       } catch (err) {
         console.warn('[autosave]', err)
       }
@@ -147,7 +202,7 @@ export function useAutosave({
     return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current) }
   }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText])
 
-  const handleRestoreAutosave = useCallback(() => {
+  const handleRestoreAutosave = useCallback(async () => {
     if (!pendingRestore) return
     const project = pendingRestore
     store.setProjectName(normalizeProjectName(String(project.name || '未命名專案')))
@@ -164,8 +219,23 @@ export function useAutosave({
       ? project.activeTab as ActiveTab : 'camera'
     store.setActiveTab(tab)
     const img = project.image as Record<string, unknown> | null
-    if (img?.dataUrl) store.loadImageDataUrl(String(img.dataUrl))
-    else triggerRedraw()
+    if (img?.dataUrl) {
+      store.loadImageDataUrl(String(img.dataUrl))
+    } else if (img?.storage === 'indexeddb') {
+      try {
+        const blob = await loadAutosaveImage()
+        if (blob) {
+          store.loadImageFile(new File([blob], 'autosave-image', { type: blob.type }), false, store.imageUrl)
+        } else {
+          triggerRedraw()
+        }
+      } catch (err) {
+        console.warn('[autosave restore image]', err)
+        triggerRedraw()
+      }
+    } else {
+      triggerRedraw()
+    }
     if (typeof project.narrationInputText === 'string') setNarrationInputText(project.narrationInputText)
     const legacyStyle = normalizeSubtitleStyle(project.subtitleStyle)
     const legacySegments = normalizeLegacySegments(project.narrationSegments)
@@ -251,6 +321,7 @@ export function useAutosave({
 
   const handleDiscardAutosave = useCallback(() => {
     localStorage.removeItem(AUTOSAVE_KEY)
+    void deleteAutosaveImage().catch(err => console.warn('[autosave discard image]', err))
     setPendingRestore(null)
     setShowRestoreModal(false)
   }, [])

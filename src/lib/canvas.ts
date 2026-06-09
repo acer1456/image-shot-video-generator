@@ -226,6 +226,10 @@ export function wrapWordsToLines(
   return lines
 }
 
+function hasCjkText(text: string) {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
 export function drawNarrationSubtitle(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -249,8 +253,11 @@ export function drawNarrationSubtitle(
   const mainLines = mainText.trim() ? [mainText.trim()] : []
   const subFontSize = Math.round(fontSize * 0.72)
   ctx.font = `650 ${subFontSize}px ${fontFamily}`
-  const subLines = subText.trim()
-    ? wrapWordsToLines(Array.from(subText.trim()), ctx, maxLineWidth).map(line => line.replace(/\s+/g, ''))
+  const trimmedSubText = subText.trim()
+  const subLines = trimmedSubText
+    ? hasCjkText(trimmedSubText)
+      ? wrapWordsToLines(Array.from(trimmedSubText), ctx, maxLineWidth).map(line => line.replace(/\s+/g, ''))
+      : wrapWordsToLines(trimmedSubText.split(/\s+/), ctx, maxLineWidth)
     : []
 
   const posX = style?.subtitlePosition?.x ?? 0.5

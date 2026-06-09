@@ -45,6 +45,14 @@ type HeadTTSInstance = {
   setup: (data: { voice?: string; language?: string; speed?: number; audioEncoding?: 'wav' | 'pcm' }) => Promise<void>
   synthesize: (data: { input: string; voice?: string; language?: string; speed?: number; audioEncoding?: 'wav' | 'pcm' }) => Promise<HeadTTSMessage[]>
   clear: () => void
+  ww?: Worker | null
+  ws?: WebSocket | null
+  rest?: unknown
+  isConnected?: boolean
+  isConnecting?: boolean
+  settings?: {
+    audioCtx?: AudioContext | null
+  }
 }
 
 type Status =
@@ -255,6 +263,26 @@ export function useheadTTS() {
     } catch {
       // Best-effort cleanup; generation errors are reported by generate().
     }
+    try {
+      headtts.ww?.terminate()
+    } catch {
+      // The worker may already have stopped after an inference error.
+    }
+    try {
+      headtts.ws?.close()
+    } catch {
+      // The socket may already be closed.
+    }
+    const audioCtx = headtts.settings?.audioCtx
+    if (audioCtx && audioCtx.state !== 'closed') {
+      void audioCtx.close().catch(() => undefined)
+    }
+    headtts.ww = null
+    headtts.ws = null
+    headtts.rest = null
+    if (headtts.settings) headtts.settings.audioCtx = null
+    headtts.isConnected = false
+    headtts.isConnecting = false
   }, [])
 
   const getHeadTTS = useCallback(async (voice: string, speed: number) => {
@@ -264,6 +292,8 @@ export function useheadTTS() {
       const mod = await import(/* @vite-ignore */ moduleUrl) as { HeadTTS: new (settings: unknown) => HeadTTSInstance }
       headttsRef.current = new mod.HeadTTS({
         endpoints: ['webgpu', 'wasm'],
+        dtypeWebgpu: 'fp32',
+        dtypeWasm: 'q4',
         languages: ['en-us'],
         voices: [voice],
         splitSentences: true,
@@ -416,12 +446,12 @@ export function useheadTTS() {
       setStatus({ phase: 'idle', message: '', progress: 100 })
       return { track, subtitleCues }
     } catch (error) {
-      releaseHeadTTS()
       const message = error instanceof Error ? error.message : 'HeadTTS 生成失敗'
       setStatus({ phase: 'error', message, progress: 0 })
       throw error
     } finally {
       generatingRef.current = false
+      releaseHeadTTS()
     }
   }, [getHeadTTS, releaseHeadTTS])
 

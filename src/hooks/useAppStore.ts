@@ -186,6 +186,28 @@ export function useAppStore() {
     return next
   }, [])
 
+  const updateCaptionPosition = useCallback((
+    pointIndex: number,
+    captionIndex: number,
+    x: number,
+    y: number,
+    currentPoints: CameraPoint[],
+  ) => {
+    const next = currentPoints.map((point, index) => {
+      if (index !== pointIndex) return point
+      if (captionIndex === 0) {
+        return { ...point, caption: { ...point.caption, x, y } }
+      }
+      const extraIndex = captionIndex - 1
+      const extraCaptions = [...(point.extraCaptions || [])]
+      if (!extraCaptions[extraIndex]) return point
+      extraCaptions[extraIndex] = { ...extraCaptions[extraIndex], x, y }
+      return { ...point, extraCaptions }
+    })
+    setPoints(next)
+    return next
+  }, [])
+
   const clearPoints = useCallback(() => {
     setPoints([])
     setActiveIndex(-1)
@@ -300,6 +322,7 @@ export function useAppStore() {
     removePoint,
     updatePointField,
     updateCaptionField,
+    updateCaptionPosition,
     clearPoints,
     insertPointAfter,
     duplicatePoint,

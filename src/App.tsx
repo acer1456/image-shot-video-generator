@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import { ThemeProvider } from 'next-themes'
 import CanvasEditor from '@/components/canvas/CanvasEditor'
 import TimelinePanel from '@/components/panel/TimelinePanel'
@@ -9,6 +9,7 @@ import { AppToolbar } from '@/components/panel/AppToolbar'
 import { CanvasSection } from '@/components/canvas/CanvasSection'
 import { EditorSidebar } from '@/components/panel/EditorSidebar'
 import { NarrationSidebar } from '@/components/panel/NarrationSidebar'
+import type { NarrationAICameraResult, NarrationAIStoryResult } from '@/components/panel/NarrationAIPanel'
 import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
 import { Button } from '@/components/ui/button'
 import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
@@ -41,7 +42,6 @@ function AppInner() {
   const lastUiUpdateRef = useRef(0)
   const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
   const [forceRedraw, setForceRedraw] = useState(0)
-  const [totalDuration, setTotalDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [isImmersiveMode, setIsImmersiveMode] = useState(false)
   const [isImmersiveLeaving, setIsImmersiveLeaving] = useState(false)
@@ -94,14 +94,13 @@ function AppInner() {
     triggerRedraw,
   })
 
-  // Sync total duration whenever points or narration timeline content changes
-  useEffect(() => {
+  const totalDuration = useMemo(() => {
     const { totalDuration: td } = buildTimeline(store.points)
     const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
     const subtitleEnd = store.showNarrationInOutput
       ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       : 0
-    setTotalDuration(Math.max(td, narrationEnd, subtitleEnd))
+    return Math.max(td, narrationEnd, subtitleEnd)
   }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
@@ -223,17 +222,9 @@ function AppInner() {
   }, [store, triggerRedraw])
 
   const handleCaptionMove = useCallback((index: number, captionIndex: number, x: number, y: number) => {
-    if (captionIndex === 0) {
-      const next = store.updateCaptionField(index, 'x', x, store.points)
-      store.updateCaptionField(index, 'y', y, next)
-      store.rememberCaptionStyle(index, next)
-    } else {
-      const extraIndex = captionIndex - 1
-      const next = store.updateExtraCaptionField(index, extraIndex, 'x', x, store.points)
-      store.updateExtraCaptionField(index, extraIndex, 'y', y, next)
-    }
-    triggerRedraw()
-  }, [store, triggerRedraw])
+    const next = store.updateCaptionPosition(index, captionIndex, x, y, store.points)
+    if (captionIndex === 0) store.rememberCaptionStyle(index, next)
+  }, [store])
 
   const handleCaptionFontResize = useCallback((index: number, captionIndex: number, scale: number) => {
     if (captionIndex === 0) {
@@ -329,6 +320,37 @@ function AppInner() {
     store.setPoints(newPoints)
     store.setActiveIndex(0)
     store.setActiveTab('camera')
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
+  const handleNarrationAiStoryApply = useCallback((result: NarrationAIStoryResult) => {
+    setNarrationInputText(result.narrationInputText)
+  }, [])
+
+  const handleNarrationAiCameraApply = useCallback((result: NarrationAICameraResult) => {
+    const newPoints = result.points.map(point => {
+      const rawPoint = {
+        x: point.x,
+        y: point.y,
+        zoom: point.zoom,
+        move: point.move,
+        moveDuration: point.moveDuration,
+        holdDuration: point.holdDuration,
+        caption: {
+          text: point.caption.text,
+          subtitle: point.caption.subtitle,
+          x: point.caption.x ?? point.caption.captionX ?? 0.5,
+          y: point.caption.y ?? point.caption.captionY ?? 0.85,
+        },
+      } as unknown as Parameters<typeof normalizePoint>[0]
+      return normalizePoint(rawPoint)
+    })
+    store.setPoints(newPoints)
+    store.setActiveIndex(newPoints.length ? 0 : -1)
+    store.setActiveTab('camera')
+    currentTimeRef.current = 0
+    setCurrentTime(0)
+    timelinePanelRef.current?.setTimeCursor(0)
     triggerRedraw()
   }, [store, triggerRedraw])
 
@@ -483,6 +505,9 @@ function AppInner() {
             onActiveSubtitleIdChange={setActiveSubtitleId}
             inputText={narrationInputText}
             onInputTextChange={setNarrationInputText}
+            image={store.image}
+            onApplyAiStory={handleNarrationAiStoryApply}
+            onApplyAiCamera={handleNarrationAiCameraApply}
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />

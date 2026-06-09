@@ -150,13 +150,21 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     timelineRef.current?.setTime(currentTime)
   }, [currentTime])
 
-  // ── Build timeline items ──────────────────────────────────────────────────
-  const { items } = useMemo(() => buildTimeline(points), [points])
+  // Caption position/style changes do not affect the camera timeline.
+  // Keep camera actions stable so the third-party editor does not rebuild its
+  // virtualized grid while a caption is being edited.
+  const cameraTimingKey = points
+    .map(point => `${point.move}:${point.moveDuration}:${point.holdDuration}`)
+    .join('|')
+  const cameraItems = useMemo(
+    () => buildTimeline(points).items.filter(item => item.type !== 'caption'),
+    [cameraTimingKey],
+  )
 
   // Camera row: hold/move blocks are resizable (right edge) but NOT draggable —
   // sequential packing means any move would create a gap.
   const cameraActions = useMemo<TimelineAction[]>(() =>
-    items.filter(i => i.type !== 'caption').map(item => ({
+    cameraItems.map(item => ({
       id:       `${item.type}-${item.pointIndex}-${Math.round(item.start * 1000)}`,
       start:    item.start,
       end:      item.end,
@@ -165,7 +173,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       flexible: true,
       data:     { label: item.label, pointIndex: item.pointIndex, type: item.type },
     } as RichAction as TimelineAction)),
-    [items],
+    [cameraItems],
   )
 
   const narrationActions = useMemo<TimelineAction[]>(() => {
@@ -211,8 +219,6 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   )
 
   // Full editorData: row order drives display sequence.
-  // `snapKey` included in deps so incrementing it creates a new array ref →
-  // autoReRender detects the change → camera/narration blocks snap back.
   const editorData = useMemo<TimelineRow[]>(() => {
     const rowMap: Record<string, TimelineRow> = {
       [ROW_CAMERA]:    { id: ROW_CAMERA,    actions: cameraActions },
@@ -220,9 +226,20 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       [ROW_SUBTITLE]:  { id: ROW_SUBTITLE,  actions: subtitleActions },
       [ROW_MUSIC]:     { id: ROW_MUSIC,     actions: localMusic },
     }
-    void snapKey
     return rowOrder.map(id => rowMap[id])
-  }, [cameraActions, narrationActions, subtitleActions, localMusic, rowOrder, snapKey])
+  }, [cameraActions, narrationActions, subtitleActions, localMusic, rowOrder])
+
+  // react-timeline-editor 1.0 uses react-virtualized's forceUpdate when
+  // editorData changes, which can recurse under React 19. Remount only when
+  // actual timeline data changes instead of updating a mounted instance.
+  const timelineDataKey = useMemo(
+    () => editorData.map(row =>
+      `${row.id}:${row.actions.map(action =>
+        `${action.id}:${action.start}:${action.end}`,
+      ).join(',')}`,
+    ).join('|'),
+    [editorData],
+  )
 
   // ── Scale count: ensure enough tick marks to cover all content ──────────
   const scaleCount = Math.max(20, Math.ceil(totalDuration) + 4)
@@ -237,6 +254,28 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       return undefined
     },
     [onTimeChange],
+  )
+
+  const handleTimelineClickCapture = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement
+      const timeArea = target.closest('.timeline-editor-time-area-interact') as HTMLElement | null
+      if (!timeArea) return
+
+      const root = rootRef.current
+      const scroller = root?.querySelector('.timeline-editor-edit-area .ReactVirtualized__Grid') as HTMLElement | null
+      if (!scroller) return
+
+      // The timeline package subtracts scrollLeft twice in its ruler boundary
+      // check, so clicks past roughly half of a long timeline are ignored.
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = timeArea.getBoundingClientRect()
+      const pixel = event.clientX - rect.left + scroller.scrollLeft
+      const time = Math.min(totalDuration, Math.max(0, (pixel - START_LEFT) / SCALE_WIDTH))
+      onTimeChange(time)
+    },
+    [onTimeChange, totalDuration],
   )
 
   const handleCursorDragStart = useCallback(
@@ -411,7 +450,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const borderCol  = isDark ? 'hsl(217.2 32.6% 17.5%)'    : 'hsl(214.3 31.8% 91.4%)'
   const scaleFg    = isDark ? 'rgba(255,255,255,.40)'      : 'rgba(0,0,0,.38)'
 
-  const hasContent = items.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0
+  const hasContent = points.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-2 select-none" style={{ margin: '-10px' }}>
@@ -447,6 +486,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         ref={rootRef}
         className="rounded-xl border overflow-hidden relative"
         style={{ height: totalH, background: labelBg, borderColor: borderCol, transition: 'height 0.2s ease' }}
+        onClickCapture={handleTimelineClickCapture}
       >
         {!hasContent ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
@@ -500,7 +540,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
             {/* ── Timeline component ── */}
             <Timeline
-              key={rowH}
+              key={`${rowH}:${snapKey}:${timelineDataKey}`}
               ref={timelineRef}
               editorData={editorData}
               effects={EFFECTS}
@@ -515,7 +555,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               dragLine
               enableRowDrag
               autoScroll
-              autoReRender
+              autoReRender={false}
               style={{ width: '100%', height: totalH, background: 'transparent' }}
               onChange={() => {}}
               getScaleRender={(scale: number) => (

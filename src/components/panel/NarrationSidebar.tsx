@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp,
+  ArrowDown, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, Camera,
   ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,12 @@ import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clampPauseIntensity, useheadTTS } from '@/hooks/useheadTTS'
 import { translateNarrationCues } from '@/lib/openrouter'
+import {
+  NarrationAIPanel,
+  type NarrationAICameraResult,
+  type NarrationAIMode,
+  type NarrationAIStoryResult,
+} from '@/components/panel/NarrationAIPanel'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -29,6 +35,9 @@ export interface NarrationSidebarProps {
   onActiveSubtitleIdChange: (id: string | null) => void
   inputText: string
   onInputTextChange: (text: string) => void
+  image: HTMLImageElement | null
+  onApplyAiStory: (result: NarrationAIStoryResult) => void
+  onApplyAiCamera: (result: NarrationAICameraResult) => void
   collapsed: boolean
   onToggleCollapse: () => void
 }
@@ -92,6 +101,7 @@ export function NarrationSidebar({
   subtitleCues, onSubtitleCuesChange,
   activeSubtitleId, onActiveSubtitleIdChange,
   inputText, onInputTextChange,
+  image, onApplyAiStory, onApplyAiCamera,
   collapsed, onToggleCollapse,
 }: NarrationSidebarProps) {
   const { generate, cancel, status, voices } = useheadTTS()
@@ -101,6 +111,7 @@ export function NarrationSidebar({
   const [playing, setPlaying] = useState(false)
   const [showPrompt, setShowPrompt] = useState(() => !inputText.trim())
   const [showSubtitleStyle, setShowSubtitleStyle] = useState(false)
+  const [aiPanelMode, setAiPanelMode] = useState<NarrationAIMode | null>(null)
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationError, setTranslationError] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -203,6 +214,15 @@ export function NarrationSidebar({
       cue.id === activeCue.id ? { ...cue, ...patch } : cue
     ))
   }, [activeCue, onSubtitleCuesChange, subtitleCues])
+
+  const swapAllCueText = useCallback(() => {
+    if (!subtitleCues.length) return
+    onSubtitleCuesChange(subtitleCues.map(cue => ({
+      ...cue,
+      text: cue.translation,
+      translation: cue.text,
+    })))
+  }, [onSubtitleCuesChange, subtitleCues])
 
   const updateActiveCueStyle = useCallback((patch: Partial<SubtitleStyle>) => {
     if (!activeCue) return
@@ -334,6 +354,24 @@ export function NarrationSidebar({
         </div>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setAiPanelMode('story')}
+            title="AI 產生英文旁白"
+            className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!image}
+          >
+            <Mic className="h-4 w-4" />
+          </button>
+          {track && subtitleCues.length > 0 && (
+            <button
+              onClick={() => setAiPanelMode('camera')}
+              title="AI 配鏡頭"
+              className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={!image}
+            >
+              <Camera className="h-4 w-4" />
+            </button>
+          )}
+          <button
             onClick={() => setShowPrompt(v => !v)}
             title="查看目前旁白內容"
             className={`h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${showPrompt ? 'text-primary' : 'text-muted-foreground'}`}
@@ -345,6 +383,21 @@ export function NarrationSidebar({
           </Button>
         </div>
       </div>
+
+      {aiPanelMode && (
+        <NarrationAIPanel
+          mode={aiPanelMode}
+          image={image}
+          subtitleCues={subtitleCues}
+          narrationDuration={track?.duration ?? 0}
+          onApplyStory={result => {
+            onApplyAiStory(result)
+            setShowPrompt(true)
+          }}
+          onApplyCamera={onApplyAiCamera}
+          onClose={() => setAiPanelMode(null)}
+        />
+      )}
 
       {showPrompt && (
         <div className="p-3 flex flex-col gap-2 flex-shrink-0">
@@ -430,6 +483,13 @@ export function NarrationSidebar({
                   <span className="text-[10px] text-muted-foreground">
                     {formatSecs(activeCue.startTime)} / {formatSecs(activeCue.duration)}
                   </span>
+                  <button
+                    onClick={swapAllCueText}
+                    title="對調全部英文與中文字幕"
+                    className="h-6 w-6 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                  >
+                    <ArrowLeftRight className="h-3.5 w-3.5" />
+                  </button>
                   <button
                     onClick={() => setShowSubtitleStyle(v => !v)}
                     title="字幕樣式"

@@ -75,6 +75,9 @@ export interface ProjectData {
   activeIndex: number
   activeTab: ActiveTab
   points: CameraPoint[]
+  narrationInputText?: string
+  narrationTrack?: NarrationTrack | null
+  subtitleCues?: SubtitleCue[]
 }
 
 export interface DragState {
