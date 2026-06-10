@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandle, useState } from 'react'
+import { useMemo, useCallback, useRef, useEffect, useLayoutEffect, forwardRef, useImperativeHandle, useState } from 'react'
 import { Timeline } from '@xzdarcy/react-timeline-editor'
 import type { TimelineState } from '@xzdarcy/react-timeline-editor'
 import type { TimelineRow, TimelineEffect, TimelineAction } from '@xzdarcy/timeline-engine'
@@ -97,6 +97,8 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const isDark      = resolvedTheme === 'dark'
   const timelineRef = useRef<TimelineState>(null)
   const rootRef     = useRef<HTMLDivElement>(null)
+  const lastScrollLeftRef = useRef(0)
+  const pendingScrollLeftRef = useRef<number | null>(null)
 
   // ── Row order + local music state ────────────────────────────────────────
   const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_NARRATION, ROW_SUBTITLE, ROW_MUSIC])
@@ -246,6 +248,37 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
   const rowH   = expanded ? ROW_HEIGHT_EXPANDED : ROW_HEIGHT
   const totalH = SCALE_HEIGHT + rowH * NUM_ROWS
+  const timelineInstanceKey = `${rowH}:${snapKey}:${timelineDataKey}`
+  const previousTimelineInstanceKeyRef = useRef(timelineInstanceKey)
+
+  if (previousTimelineInstanceKeyRef.current !== timelineInstanceKey) {
+    pendingScrollLeftRef.current = lastScrollLeftRef.current
+    previousTimelineInstanceKeyRef.current = timelineInstanceKey
+  }
+
+  useLayoutEffect(() => {
+    const scrollLeft = pendingScrollLeftRef.current
+    if (scrollLeft == null) return
+
+    const restore = () => {
+      timelineRef.current?.setScrollLeft(scrollLeft)
+      timelineRef.current?.setTime(currentTime)
+    }
+
+    restore()
+    const frame = requestAnimationFrame(() => {
+      restore()
+      lastScrollLeftRef.current = scrollLeft
+      pendingScrollLeftRef.current = null
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [currentTime, timelineInstanceKey])
+
+  const handleTimelineScroll = useCallback((params: { scrollLeft: number }) => {
+    if (pendingScrollLeftRef.current == null) {
+      lastScrollLeftRef.current = params.scrollLeft
+    }
+  }, [])
 
   // ── Callbacks ─────────────────────────────────────────────────────────────
   const handleClickTime = useCallback(
@@ -540,7 +573,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
             {/* ── Timeline component ── */}
             <Timeline
-              key={`${rowH}:${snapKey}:${timelineDataKey}`}
+              key={timelineInstanceKey}
               ref={timelineRef}
               editorData={editorData}
               effects={EFFECTS}
@@ -556,6 +589,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               enableRowDrag
               autoScroll
               autoReRender={false}
+              onScroll={handleTimelineScroll}
               style={{ width: '100%', height: totalH, background: 'transparent' }}
               onChange={() => {}}
               getScaleRender={(scale: number) => (
