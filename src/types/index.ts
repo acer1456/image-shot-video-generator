@@ -121,6 +121,8 @@ export interface NarrationAudioSegment {
   text: string
   startTime: number
   duration: number
+  audioData?: Float32Array
+  samplingRate?: number
   pauseAfterMs: number
   wordStartIndex: number
   wordEndIndex: number

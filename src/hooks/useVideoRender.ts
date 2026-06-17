@@ -5,7 +5,15 @@ import { buildTimeline, drawCamera as doDrawCamera, getTimelineStateAt } from '@
 import { OUTPUT_W, OUTPUT_H, sanitizeFileName, getTodayString, wait } from '@/lib/utils'
 import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from '@/lib/chinese'
 import type { NarrationTrack, SubtitleCue } from '@/types'
-import { getActiveSubtitleCue, getSubtitleRenderText } from '@/lib/narration'
+import {
+  createNarrationMixdown,
+  getActiveSubtitleCue,
+  getNarrationDuration,
+  getNarrationFrameSample,
+  getNarrationSampleRate,
+  getSubtitleRenderText,
+  hasNarrationAudio,
+} from '@/lib/narration'
 
 export type VideoRenderMethod = 'mediaRecorder' | 'webCodecs'
 
@@ -50,24 +58,15 @@ function createProgressReporter(setRenderProgress: (progress: number) => void) {
   }
 }
 
-function hasNarrationAudio(track: NarrationTrack | null) {
-  return !!track?.audioData && !!track.samplingRate && track.duration > 0
-}
-
-function getNarrationFrameSample(track: NarrationTrack, sampleIndex: number) {
-  const startFrame = Math.max(0, Math.round(track.startTime * track.samplingRate!))
-  const sourceIndex = sampleIndex - startFrame
-  if (sourceIndex < 0 || sourceIndex >= track.audioData!.length) return 0
-  return track.audioData![sourceIndex]
-}
-
 async function createNarrationAudioTrack(track: NarrationTrack | null) {
-  if (!hasNarrationAudio(track)) return null
-  const audioCtx = new AudioContext({ sampleRate: track!.samplingRate })
+  if (!track) return null
+  const mixdown = createNarrationMixdown(track)
+  if (!mixdown) return null
+  const audioCtx = new AudioContext({ sampleRate: mixdown.sampleRate })
   await audioCtx.resume()
   const destination = audioCtx.createMediaStreamDestination()
-  const buffer = audioCtx.createBuffer(1, track!.audioData!.length, track!.samplingRate!)
-  buffer.copyToChannel(track!.audioData!, 0)
+  const buffer = audioCtx.createBuffer(1, mixdown.audioData.length, mixdown.sampleRate)
+  buffer.copyToChannel(mixdown.audioData, 0)
   const source = audioCtx.createBufferSource()
   source.buffer = buffer
   source.connect(destination)
@@ -103,7 +102,7 @@ export function useVideoRender({
         : await convertSubtitleCues(subtitleCues, captionConversion)
       const { totalDuration: td } = buildTimeline(renderPoints)
       const renderNarrationTrack = showNarration ? narrationTrack : null
-      const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + renderNarrationTrack.duration : 0
+      const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + getNarrationDuration(renderNarrationTrack) : 0
       const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       const renderDuration = Math.max(td, narrationEnd, subtitleEnd)
       const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
@@ -199,8 +198,7 @@ async function renderWithMediaRecorder(
     recorder.start()
     const wallStart = performance.now() + startDelayMs
     if (narrationAudio) {
-      const delay = Math.max(0, narrationTrack!.startTime)
-      narrationAudio.source.start(narrationAudio.audioCtx.currentTime + startDelayMs / 1000 + delay)
+      narrationAudio.source.start(narrationAudio.audioCtx.currentTime + startDelayMs / 1000)
     }
 
     // MediaRecorder timestamps frames using real capture time, so draw from the
@@ -284,7 +282,7 @@ async function renderWithWebCodecs(
         audio: {
           codec: 'A_OPUS',
           numberOfChannels: 1,
-          sampleRate: narrationTrack!.samplingRate!,
+          sampleRate: getNarrationSampleRate(narrationTrack)!,
         },
       }
       : {}),
@@ -316,7 +314,7 @@ async function renderWithWebCodecs(
   if (hasNarrationAudio(narrationTrack)) {
     const audioConfig = {
       codec: 'opus',
-      sampleRate: narrationTrack!.samplingRate!,
+      sampleRate: getNarrationSampleRate(narrationTrack)!,
       numberOfChannels: 1,
       bitrate: 96_000,
     }
@@ -380,9 +378,9 @@ function createNarrationAudioEncodeController(
   track: NarrationTrack,
   totalDuration: number,
 ) {
-  const sampleRate = track.samplingRate!
+  const sampleRate = getNarrationSampleRate(track)!
   const framesPerChunk = Math.max(1, Math.round(sampleRate * OPUS_FRAME_MS / 1000))
-  const totalAudioFrames = Math.ceil(Math.min(totalDuration, track.startTime + track.duration) * sampleRate)
+  const totalAudioFrames = Math.ceil(Math.min(totalDuration, track.startTime + getNarrationDuration(track)) * sampleRate)
   let frameOffset = 0
 
   return {
@@ -392,7 +390,7 @@ function createNarrationAudioEncodeController(
         const frameCount = Math.min(framesPerChunk, targetFrame - frameOffset)
         const samples = new Float32Array(frameCount)
         for (let i = 0; i < frameCount; i++) {
-          samples[i] = getNarrationFrameSample(track, frameOffset + i)
+          samples[i] = getNarrationFrameSample(track, frameOffset + i, sampleRate)
         }
         const audioData = new AudioDataCtor({
           format: 'f32-planar',

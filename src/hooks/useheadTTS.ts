@@ -340,7 +340,6 @@ export function useheadTTS() {
       setStatus({ phase: 'generating', message: '生成旁白語音…', progress: 0 })
       const headtts = await getHeadTTS(voice, speed)
 
-      const audioParts: Float32Array[] = []
       const segments: NarrationAudioSegment[] = []
       const words: NarrationWordTimestamp[] = []
       const phonemes: NarrationPhonemeTimestamp[] = []
@@ -351,6 +350,7 @@ export function useheadTTS() {
         const speechSegment = speechSegments[segmentIndex]
         const segmentId = crypto.randomUUID()
         const segmentStartTime = offset
+        const segmentAudioParts: Float32Array[] = []
         const wordStartIndex = words.length
         const messages = await headtts.synthesize({
           input: speechSegment.text,
@@ -367,7 +367,7 @@ export function useheadTTS() {
           const audio = message.data?.audio
           if (!audio) continue
           const channel = audio.getChannelData(0)
-          audioParts.push(new Float32Array(channel))
+          segmentAudioParts.push(new Float32Array(channel))
           samplingRate = audio.sampleRate
 
           const rawWords = message.data?.words ?? []
@@ -399,11 +399,14 @@ export function useheadTTS() {
 
         const segmentDuration = Math.max(0, offset - segmentStartTime)
         if (segmentDuration > 0) {
+          const segmentAudioData = concatFloat32(segmentAudioParts)
           segments.push({
             id: segmentId,
             text: speechSegment.text,
             startTime: segmentStartTime,
             duration: segmentDuration,
+            audioData: segmentAudioData,
+            samplingRate,
             pauseAfterMs: speechSegment.pauseAfterMs,
             wordStartIndex,
             wordEndIndex: words.length - 1,
@@ -412,7 +415,6 @@ export function useheadTTS() {
 
         const silence = createSilence(speechSegment.pauseAfterMs, samplingRate)
         if (silence) {
-          audioParts.push(silence)
           offset += silence.length / samplingRate
         }
 
@@ -423,10 +425,10 @@ export function useheadTTS() {
         })
       }
 
-      if (!audioParts.length) throw new Error('HeadTTS 沒有回傳音訊')
+      if (!segments.length) throw new Error('HeadTTS 沒有回傳音訊')
 
-      const audioData = concatFloat32(audioParts)
       const narrationId = crypto.randomUUID()
+      const duration = segments.reduce((max, segment) => Math.max(max, segment.startTime + segment.duration), 0)
       const track: NarrationTrack = {
         id: narrationId,
         text: trimmed,
@@ -434,8 +436,8 @@ export function useheadTTS() {
         speed,
         pauseIntensity: normalizedPauseIntensity,
         startTime: 0,
-        duration: audioData.length / samplingRate,
-        audioData,
+        duration,
+        audioData: undefined,
         samplingRate,
         segments,
         words,

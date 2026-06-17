@@ -16,6 +16,7 @@ import {
   type NarrationAIMode,
   type NarrationAIStoryResult,
 } from '@/components/panel/NarrationAIPanel'
+import { createNarrationMixdown, getNarrationDuration } from '@/lib/narration'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -96,6 +97,13 @@ function createWavUrl(audioData: Float32Array, sampleRate: number) {
   return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }))
 }
 
+function getNarrationAudioCacheKey(track: NarrationTrack) {
+  const segmentsKey = track.segments
+    .map(segment => `${segment.id}:${segment.startTime}:${segment.duration}`)
+    .join('|')
+  return `${track.id}:${track.startTime}:${track.duration}:${segmentsKey}`
+}
+
 export function NarrationSidebar({
   track, onTrackChange,
   subtitleCues, onSubtitleCuesChange,
@@ -174,12 +182,14 @@ export function NarrationSidebar({
       setPlaying(false)
       return
     }
-    if (!track.audioData || !track.samplingRate) return
-    if (audioUrlRef.current?.trackId !== track.id) {
+    const mixdown = createNarrationMixdown(track)
+    if (!mixdown) return
+    const audioKey = getNarrationAudioCacheKey(track)
+    if (audioUrlRef.current?.trackId !== audioKey) {
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current.url)
       audioUrlRef.current = {
-        trackId: track.id,
-        url: createWavUrl(track.audioData, track.samplingRate),
+        trackId: audioKey,
+        url: createWavUrl(mixdown.audioData, mixdown.sampleRate),
       }
     }
     const source = new Audio(audioUrlRef.current.url)
@@ -348,7 +358,7 @@ export function NarrationSidebar({
           <h2 className="text-sm font-bold">旁白</h2>
           {track && (
             <span className="text-xs text-muted-foreground bg-muted rounded px-1">
-              {formatSecs(track.duration)}
+              {formatSecs(getNarrationDuration(track))}
             </span>
           )}
         </div>

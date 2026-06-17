@@ -13,6 +13,59 @@ export function getSubtitleRenderText(cue: SubtitleCue | null): string {
   return main || sub
 }
 
+export function getNarrationSampleRate(track: NarrationTrack | null): number | null {
+  if (!track) return null
+  return track.samplingRate ?? track.segments.find(segment => segment.samplingRate)?.samplingRate ?? null
+}
+
+export function getNarrationDuration(track: NarrationTrack | null): number {
+  if (!track) return 0
+  const segmentDuration = track.segments.reduce(
+    (max, segment) => Math.max(max, segment.startTime + segment.duration),
+    0,
+  )
+  return Math.max(track.duration, segmentDuration)
+}
+
+export function hasNarrationAudio(track: NarrationTrack | null): boolean {
+  if (!track) return false
+  const hasSegments = track.segments.some(segment => !!segment.audioData && !!(segment.samplingRate ?? track.samplingRate))
+  return hasSegments || (!!track.audioData && !!track.samplingRate && track.duration > 0)
+}
+
+export function getNarrationFrameSample(track: NarrationTrack, sampleIndex: number, sampleRate: number): number {
+  const segmentAudio = track.segments.filter(segment => segment.audioData && (segment.samplingRate ?? sampleRate) === sampleRate)
+  if (segmentAudio.length) {
+    let mixed = 0
+    for (const segment of segmentAudio) {
+      const startFrame = Math.max(0, Math.round((track.startTime + segment.startTime) * sampleRate))
+      const sourceIndex = sampleIndex - startFrame
+      if (sourceIndex >= 0 && sourceIndex < segment.audioData!.length) {
+        mixed += segment.audioData![sourceIndex]
+      }
+    }
+    return Math.max(-1, Math.min(1, mixed))
+  }
+
+  if (!track.audioData || !track.samplingRate) return 0
+  const startFrame = Math.max(0, Math.round(track.startTime * track.samplingRate))
+  const sourceIndex = sampleIndex - startFrame
+  if (sourceIndex < 0 || sourceIndex >= track.audioData.length) return 0
+  return track.audioData[sourceIndex]
+}
+
+export function createNarrationMixdown(track: NarrationTrack): { audioData: Float32Array; sampleRate: number } | null {
+  const sampleRate = getNarrationSampleRate(track)
+  if (!sampleRate || !hasNarrationAudio(track)) return null
+  const endTime = track.startTime + getNarrationDuration(track)
+  const totalFrames = Math.max(1, Math.ceil(endTime * sampleRate))
+  const audioData = new Float32Array(totalFrames)
+  for (let i = 0; i < totalFrames; i++) {
+    audioData[i] = getNarrationFrameSample(track, i, sampleRate)
+  }
+  return { audioData, sampleRate }
+}
+
 export function scheduleNarrationAudio(
   track: NarrationTrack | null,
   fromTime: number,
@@ -21,25 +74,45 @@ export function scheduleNarrationAudio(
 ) {
   for (const src of sourcesRef.current) { try { src.stop() } catch { /* already stopped */ } }
   sourcesRef.current = []
-  if (!track?.audioData || !track.samplingRate) return
-  if (track.startTime + track.duration <= fromTime) return
+  if (!track || !hasNarrationAudio(track)) return
+  if (track.startTime + getNarrationDuration(track) <= fromTime) return
 
   if (!ctxRef.current || ctxRef.current.state === 'closed') {
     ctxRef.current = new AudioContext()
   }
   const ctx = ctxRef.current
+  const segmentAudio = track.segments.filter(segment => segment.audioData && !!(segment.samplingRate ?? track.samplingRate))
+  if (segmentAudio.length) {
+    for (const segment of segmentAudio) {
+      const samplingRate = segment.samplingRate ?? track.samplingRate!
+      const segmentEnd = track.startTime + segment.startTime + segment.duration
+      if (segmentEnd <= fromTime) continue
+      const buffer = ctx.createBuffer(1, segment.audioData!.length, samplingRate)
+      buffer.copyToChannel(segment.audioData!, 0)
+      const source = ctx.createBufferSource()
+      source.buffer = buffer
+      source.connect(ctx.destination)
+      const delay = track.startTime + segment.startTime - fromTime
+      if (delay >= 0) {
+        source.start(ctx.currentTime + delay)
+      } else {
+        const offset = Math.min(-delay, segment.duration - 0.01)
+        source.start(ctx.currentTime, Math.max(0, offset))
+      }
+      sourcesRef.current.push(source)
+    }
+    return
+  }
+
+  if (!track.audioData || !track.samplingRate) return
   const buffer = ctx.createBuffer(1, track.audioData.length, track.samplingRate)
   buffer.copyToChannel(track.audioData, 0)
   const source = ctx.createBufferSource()
   source.buffer = buffer
   source.connect(ctx.destination)
   const delay = track.startTime - fromTime
-  if (delay >= 0) {
-    source.start(ctx.currentTime + delay)
-  } else {
-    const offset = Math.min(-delay, track.duration - 0.01)
-    source.start(ctx.currentTime, Math.max(0, offset))
-  }
+  if (delay >= 0) source.start(ctx.currentTime + delay)
+  else source.start(ctx.currentTime, Math.max(0, Math.min(-delay, track.duration - 0.01)))
   sourcesRef.current.push(source)
 }
 

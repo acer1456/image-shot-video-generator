@@ -25,6 +25,7 @@ import {
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
+  getNarrationDuration,
   getSubtitleRenderText,
   scheduleNarrationAudio,
   stopNarrationAudio,
@@ -96,7 +97,7 @@ function AppInner() {
 
   const totalDuration = useMemo(() => {
     const { totalDuration: td } = buildTimeline(store.points)
-    const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + narrationTrack.duration : 0
+    const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + getNarrationDuration(narrationTrack) : 0
     const subtitleEnd = store.showNarrationInOutput
       ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       : 0

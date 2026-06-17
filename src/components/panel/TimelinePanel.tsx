@@ -11,7 +11,15 @@ import { Play, Pause, ChevronsUpDown, ChevronsDownUp, Trash2 } from 'lucide-reac
 
 // Extended action type that carries our app-specific metadata
 type RichAction = TimelineAction & {
-  data?: { label: string; pointIndex: number; type: string; trackId?: string; cueId?: string }
+  data?: {
+    label: string
+    pointIndex: number
+    type: string
+    trackId?: string
+    cueId?: string
+    segmentId?: string
+    waveform?: number[]
+  }
 }
 
 /** Imperative handle exposed to parent for direct cursor control (bypasses React state) */
@@ -64,6 +72,24 @@ function getActionColors(effectId: string, rowId: string): { bg: string; fg: str
     case 'caption': return { bg: 'rgba(234,179,8,.90)',  fg: '#1a1a1a' }
     default:        return { bg: 'rgba(100,100,100,.6)', fg: '#ffffff' }
   }
+}
+
+function buildWaveformPeaks(audioData: Float32Array | undefined, bars = 32) {
+  if (!audioData?.length) return undefined
+  const peaks: number[] = []
+  const samplesPerBar = Math.max(1, Math.floor(audioData.length / bars))
+  for (let bar = 0; bar < bars; bar++) {
+    const start = bar * samplesPerBar
+    const end = bar === bars - 1 ? audioData.length : Math.min(audioData.length, start + samplesPerBar)
+    let peak = 0
+    for (let i = start; i < end; i++) {
+      const value = Math.abs(audioData[i])
+      if (value > peak) peak = value
+    }
+    peaks.push(Math.min(1, peak))
+  }
+  const maxPeak = Math.max(...peaks)
+  return maxPeak > 0 ? peaks.map(peak => Math.max(0.08, peak / maxPeak)) : peaks
 }
 
 interface TimelinePanelProps {
@@ -180,19 +206,21 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
   const narrationActions = useMemo<TimelineAction[]>(() => {
     if (!narrationTrack || narrationTrack.duration <= 0) return []
-    if (narrationTrack.segments?.length) {
+    if (narrationTrack.segments.length) {
       return narrationTrack.segments.map((segment, index) => ({
         id:       `narration-${segment.id}`,
         start:    narrationTrack.startTime + segment.startTime,
         end:      narrationTrack.startTime + segment.startTime + segment.duration,
         effectId: 'narration',
-        movable:  false,
+        movable:  true,
         flexible: false,
         data: {
           label: segment.text.slice(0, 24) || `旁白 ${index + 1}`,
           pointIndex: index,
           type: 'narration',
           trackId: narrationTrack.id,
+          segmentId: segment.id,
+          waveform: buildWaveformPeaks(segment.audioData),
         },
       } as RichAction as TimelineAction))
     }
@@ -201,9 +229,15 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       start:    narrationTrack.startTime,
       end:      narrationTrack.startTime + narrationTrack.duration,
       effectId: 'narration',
-      movable:  false,
+      movable:  true,
       flexible: false,
-      data: { label: '旁白音訊', pointIndex: -1, type: 'narration', trackId: narrationTrack.id },
+      data: {
+        label: '旁白音訊',
+        pointIndex: -1,
+        type: 'narration',
+        trackId: narrationTrack.id,
+        waveform: buildWaveformPeaks(narrationTrack.audioData),
+      },
     } as RichAction as TimelineAction]
   }, [narrationTrack])
 
@@ -364,7 +398,18 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }) => {
       const { action, row, start, end } = params
       const rich = action as RichAction
-      if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
+      if (row.id === ROW_NARRATION && narrationTrack && onNarrationTrackChange) {
+        const segmentId = rich.data?.segmentId
+        if (segmentId) {
+          const nextSegments = narrationTrack.segments.map(segment =>
+            segment.id === segmentId ? { ...segment, startTime: Math.max(0, start - narrationTrack.startTime) } : segment
+          )
+          const duration = nextSegments.reduce((max, segment) => Math.max(max, segment.startTime + segment.duration), 0)
+          onNarrationTrackChange({ ...narrationTrack, duration, segments: nextSegments })
+        } else {
+          onNarrationTrackChange({ ...narrationTrack, startTime: Math.max(0, start) })
+        }
+      } else if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
         const cueId = rich.data?.cueId
         if (cueId) {
           const duration = end - start
@@ -379,7 +424,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         setSnapKey(k => k + 1)
       }
     },
-    [subtitleCues, onSubtitleCuesChange],
+    [narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange],
   )
 
   const handleRowDragEnd = useCallback(
@@ -609,6 +654,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                 const rich = action as RichAction
                 const dur  = (action.end - action.start).toFixed(1)
                 const { bg, fg } = getActionColors(action.effectId, row.id)
+                const waveform = row.id === ROW_NARRATION ? rich.data?.waveform : undefined
                 return (
                   <div
                     title={row.id === ROW_MUSIC || row.id === ROW_SUBTITLE ? '雙擊刪除' : undefined}
@@ -616,6 +662,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                       width: '100%', height: '100%',
                       borderRadius: 3,
                       background: bg, color: fg,
+                      position: 'relative',
                       display: 'flex', alignItems: 'center',
                       paddingLeft: 6, paddingRight: 5,
                       fontSize: 11, fontWeight: 700,
@@ -624,10 +671,37 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                       userSelect: 'none',
                     }}
                   >
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {waveform && (
+                      <div
+                        aria-hidden="true"
+                        style={{
+                          position: 'absolute',
+                          inset: '4px 5px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1,
+                          opacity: 0.48,
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        {waveform.map((peak, index) => (
+                          <span
+                            key={index}
+                            style={{
+                              flex: 1,
+                              minWidth: 1,
+                              height: `${Math.max(10, peak * 100)}%`,
+                              borderRadius: 999,
+                              background: 'rgba(255,255,255,.78)',
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <span style={{ position: 'relative', zIndex: 1, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {rich.data?.label ?? ''}
                     </span>
-                    <span style={{ fontSize: 10, opacity: 0.72, marginLeft: 4, flexShrink: 0, fontWeight: 500 }}>
+                    <span style={{ position: 'relative', zIndex: 1, fontSize: 10, opacity: 0.82, marginLeft: 4, flexShrink: 0, fontWeight: 500 }}>
                       {dur}s
                     </span>
                   </div>
