@@ -490,12 +490,27 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     [narrationTrack, onSubtitleCuesChange, onSubtitleSelect, subtitleCues],
   )
 
-  // Double-click music/subtitle action → remove it
+  // Double-click music/narration/subtitle action → remove it
   const handleDoubleClickAction = useCallback(
     (event: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow }) => {
       event.stopPropagation()
       if (params.row.id === ROW_MUSIC) {
         setLocalMusic(prev => prev.filter(a => a.id !== params.action.id))
+      } else if (params.row.id === ROW_NARRATION && narrationTrack && onNarrationTrackChange) {
+        const rich = params.action as RichAction
+        const segmentId = rich.data?.segmentId
+        if (!window.confirm('確定要刪除這段旁白音訊嗎？')) return
+        if (!segmentId) {
+          onNarrationTrackChange(null)
+          return
+        }
+        const nextSegments = narrationTrack.segments.filter(segment => segment.id !== segmentId)
+        if (!nextSegments.length) {
+          onNarrationTrackChange(null)
+          return
+        }
+        const duration = nextSegments.reduce((max, segment) => Math.max(max, segment.startTime + segment.duration), 0)
+        onNarrationTrackChange({ ...narrationTrack, duration, segments: nextSegments })
       } else if (params.row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
         const rich = params.action as RichAction
         const cueId = rich.data?.cueId ?? String(params.action.id).replace(/^subtitle-/, '')
@@ -505,7 +520,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         }
       }
     },
-    [onSubtitleCuesChange, subtitleCues],
+    [narrationTrack, onNarrationTrackChange, onSubtitleCuesChange, subtitleCues],
   )
 
   const handleClearNarrationRow = useCallback((event: React.MouseEvent) => {
