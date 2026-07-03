@@ -2,7 +2,7 @@ import type { CameraPoint, CaptionData, BackgroundSettings, SubtitleStyle } from
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
-  wrapText, measureText
+  wrapText
 } from './utils'
 
 export interface FitRect {
@@ -102,7 +102,28 @@ export function getAllCaptions(point: CameraPoint): CaptionData[] {
   return [point.caption, ...(point.extraCaptions || [])]
 }
 
+// 字幕排版快取：CaptionData 在 store 內是 immutable 更新（每次編輯都是新物件），
+// 所以能以物件參照為 key。字型載入完成會使 measureText 結果改變，用 generation 使快取失效。
+const captionLayoutCache = new WeakMap<CaptionData, { key: string; layout: CaptionLayout }>()
+let fontGeneration = 0
+if (typeof document !== 'undefined' && document.fonts?.addEventListener) {
+  document.fonts.addEventListener('loadingdone', () => { fontGeneration++ })
+}
+
 export function getCaptionLayout(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  cap: CaptionData
+): CaptionLayout {
+  const cacheKey = `${canvas.width}x${canvas.height}|${fontGeneration}`
+  const cached = captionLayoutCache.get(cap)
+  if (cached && cached.key === cacheKey) return cached.layout
+  const layout = computeCaptionLayout(canvas, ctx, cap)
+  captionLayoutCache.set(cap, { key: cacheKey, layout })
+  return layout
+}
+
+function computeCaptionLayout(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cap: CaptionData
@@ -118,15 +139,10 @@ export function getCaptionLayout(
   const textMaxW = baseTextMaxW * boxScaleX
   const mainLines = wrapText(ctx, cap.text || '', textMaxW, `800 ${mainSize}px ${fontFamily}`)
   const subLines = wrapText(ctx, cap.subtitle || '', textMaxW, `650 ${subSize}px ${subtitleFontFamily}`)
-  const mainW = mainLines.length ? Math.max(...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`))) : 0
-  const subW = subLines.length ? Math.max(...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) : 0
-  void mainW; void subW
   const gap = mainLines.length && subLines.length ? 18 * cap.scale : 0
   const textH = mainLines.length * mainLine + gap + subLines.length * subLine
   const padX = 38 * cap.scale
   const padY = 24 * cap.scale
-  const baseW = Math.max(240, ...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`)), ...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) + padX * 2
-  void baseW
   const baseH = Math.max(70, textH + padY * 2)
   const width = Math.min(canvas.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, 240 + padX * 2))
   const height = Math.min(canvas.height * 0.5, baseH * (cap.boxScaleY || 1))
