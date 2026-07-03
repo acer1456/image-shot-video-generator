@@ -149,7 +149,8 @@ export function useVideoRender({
       document.body.appendChild(a); a.click(); a.remove()
     } catch (err) {
       console.error(err)
-      alert('影片產生失敗，請打開 Console 查看錯誤。')
+      const detail = err instanceof Error ? err.message : String(err)
+      alert(`影片產生失敗：${detail}`)
     } finally {
       store.setIsRendering(false)
       triggerRedraw()

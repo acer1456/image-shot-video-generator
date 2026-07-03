@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator'
 import { clamp } from '@/lib/utils'
 import { GripVertical, Plus, Trash2, Copy, ChevronsLeft, ChevronsRight, ChevronDown, ChevronUp, Type } from 'lucide-react'
 import { drawPointThumbnail } from '@/lib/canvas'
+import { CAMERA_TEMPLATES } from '@/lib/cameraTemplates'
 
 interface CameraPanelProps {
   points: CameraPoint[]
@@ -153,6 +154,27 @@ export default function CameraPanel({
           加入全圖末點
           <ChevronsRight className="h-3.5 w-3.5" />
         </Button>
+      </div>
+
+      {/* 運鏡模板：一鍵套用常用鏡頭路徑 */}
+      <div>
+        <Select
+          value=""
+          disabled={!hasImage}
+          className="h-8 text-xs"
+          onChange={e => {
+            const template = CAMERA_TEMPLATES.find(t => t.id === e.target.value)
+            if (!template) return
+            e.target.value = ''
+            if (points.length > 0 && !confirm(`套用「${template.label}」會取代目前 ${points.length} 個鏡頭，確定要繼續嗎？`)) return
+            onReorder(template.build(), 0)
+          }}
+        >
+          <option value="">套用運鏡模板…</option>
+          {CAMERA_TEMPLATES.map(t => (
+            <option key={t.id} value={t.id} title={t.description}>{t.label}</option>
+          ))}
+        </Select>
       </div>
 
       {points.length === 0 && (
