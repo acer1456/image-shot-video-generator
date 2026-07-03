@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, ChevronDown, Loader2, RefreshCw, Sparkles, X
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { fetchOpenRouterModels, type OpenRouterModelInfo } from '@/lib/openrouter'
+import { createAiTimeoutSignal, fetchOpenRouterModels, isAbortError, parseAiJsonObject, type OpenRouterModelInfo } from '@/lib/openrouter'
 import type { SubtitleCue } from '@/types'
 
 const LS_KEY_KEY = 'openrouter_api_key'
@@ -150,18 +150,6 @@ function formatPrice(p: string): string {
 function normalizeStoryResult(raw: unknown): NarrationAIStoryResult {
   const data = raw as Partial<NarrationAIStoryResult>
   return { narrationInputText: String(data.narrationInputText ?? '').trim() }
-}
-
-function parseJsonObject(raw: string): unknown {
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
-    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1))
-    throw new Error('AI 回傳的 JSON 無法解析')
-  }
 }
 
 function getCueSpanDuration(cues: SubtitleCue[], index: number, narrationDuration: number) {
@@ -327,7 +315,10 @@ async function requestStructuredJson(params: {
   schemaName: string
   maxTokens: number
 }) {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  let response: Response
+  try {
+    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    signal: createAiTimeoutSignal(),
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${params.apiKey.trim()}`,
@@ -355,7 +346,11 @@ async function requestStructuredJson(params: {
       },
       max_tokens: params.maxTokens,
     }),
-  })
+    })
+  } catch (error) {
+    if (isAbortError(error)) throw new Error('AI 請求逾時，請重試或換模型')
+    throw error
+  }
 
   if (!response.ok) {
     let message = `API 錯誤 ${response.status}`
@@ -369,7 +364,7 @@ async function requestStructuredJson(params: {
   const data = await response.json()
   const raw = String(data.choices?.[0]?.message?.content ?? '')
   if (!raw) throw new Error('AI 未回傳任何內容')
-  return parseJsonObject(raw)
+  return parseAiJsonObject<unknown>(raw, 'AI 回傳的 JSON 無法解析')
 }
 
 interface ModelComboboxProps {

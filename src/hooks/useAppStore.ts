@@ -106,6 +106,11 @@ export function useAppStore() {
     const url = URL.createObjectURL(file)
     setImageUrl(url)
     const img = new Image()
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      setImageUrl(null)
+      alert(`「${file.name}」不是瀏覽器支援的圖片格式，請改用 JPG / PNG / WebP。`)
+    }
     img.onload = () => {
       setImage(img)
       if (resetProject) {
@@ -122,6 +127,9 @@ export function useAppStore() {
 
   const loadImageDataUrl = useCallback((dataUrl: string) => {
     const img = new Image()
+    img.onerror = () => {
+      alert('專案內的圖片資料已損毀，無法載入。')
+    }
     img.onload = () => {
       setImage(img)
       if (imageUrl) {

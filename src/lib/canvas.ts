@@ -139,6 +139,37 @@ export function getCaptionLayout(
   }
 }
 
+// 模糊背景在預覽 / 匯出時每一幀都相同，但 ctx.filter blur 在 1080×1920 非常昂貴。
+// 以 image 為 key 快取模糊結果，同一張圖 + 相同設定只算一次。
+const blurBackgroundCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>()
+
+function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement, bg: BackgroundSettings) {
+  const key = `${bg.blur || 0}|${canvas.width}x${canvas.height}`
+  let perImage = blurBackgroundCache.get(image)
+  if (!perImage) {
+    perImage = new Map()
+    blurBackgroundCache.set(image, perImage)
+  }
+  const cached = perImage.get(key)
+  if (cached) return cached
+  const off = document.createElement('canvas')
+  off.width = canvas.width
+  off.height = canvas.height
+  const offCtx = off.getContext('2d')!
+  offCtx.filter = `blur(${bg.blur || 0}px)`
+  const scale = Math.max(off.width / image.width, off.height / image.height)
+  const dw = image.width * scale
+  const dh = image.height * scale
+  const dx = (off.width - dw) / 2
+  const dy = (off.height - dh) / 2
+  const bleed = Math.max(0, (bg.blur || 0) * 2)
+  offCtx.drawImage(image, dx - bleed, dy - bleed, dw + bleed * 2, dh + bleed * 2)
+  // 編輯畫布與匯出畫布尺寸不同會各留一份；超過 4 份時清掉最舊的
+  if (perImage.size >= 4) perImage.delete(perImage.keys().next().value!)
+  perImage.set(key, off)
+  return off
+}
+
 export function drawOutputBackground(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -148,16 +179,7 @@ export function drawOutputBackground(
   ctx.fillStyle = bg.color || '#000000'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   if (!image || bg.mode !== 'blur') return
-  ctx.save()
-  ctx.filter = `blur(${bg.blur || 0}px)`
-  const scale = Math.max(canvas.width / image.width, canvas.height / image.height)
-  const dw = image.width * scale
-  const dh = image.height * scale
-  const dx = (canvas.width - dw) / 2
-  const dy = (canvas.height - dh) / 2
-  const bleed = Math.max(0, (bg.blur || 0) * 2)
-  ctx.drawImage(image, dx - bleed, dy - bleed, dw + bleed * 2, dh + bleed * 2)
-  ctx.restore()
+  ctx.drawImage(getBlurredBackground(canvas, image, bg), 0, 0)
 }
 
 export function drawCamera(

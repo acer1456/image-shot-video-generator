@@ -9,7 +9,6 @@ import {
   createNarrationMixdown,
   getActiveSubtitleCue,
   getNarrationDuration,
-  getNarrationFrameSample,
   getNarrationSampleRate,
   getSubtitleRenderText,
   hasNarrationAudio,
@@ -381,6 +380,8 @@ function createNarrationAudioEncodeController(
   const sampleRate = getNarrationSampleRate(track)!
   const framesPerChunk = Math.max(1, Math.round(sampleRate * OPUS_FRAME_MS / 1000))
   const totalAudioFrames = Math.ceil(Math.min(totalDuration, track.startTime + getNarrationDuration(track)) * sampleRate)
+  // 一次性混音，避免逐 sample 呼叫函式（60 秒旁白 ≈ 144 萬次呼叫）
+  const mixdownData = createNarrationMixdown(track)?.audioData ?? new Float32Array(0)
   let frameOffset = 0
 
   return {
@@ -389,9 +390,8 @@ function createNarrationAudioEncodeController(
       while (frameOffset < targetFrame) {
         const frameCount = Math.min(framesPerChunk, targetFrame - frameOffset)
         const samples = new Float32Array(frameCount)
-        for (let i = 0; i < frameCount; i++) {
-          samples[i] = getNarrationFrameSample(track, frameOffset + i, sampleRate)
-        }
+        const available = Math.max(0, Math.min(frameCount, mixdownData.length - frameOffset))
+        if (available > 0) samples.set(mixdownData.subarray(frameOffset, frameOffset + available))
         const audioData = new AudioDataCtor({
           format: 'f32-planar',
           sampleRate,

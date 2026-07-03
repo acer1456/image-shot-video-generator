@@ -33,35 +33,27 @@ export function hasNarrationAudio(track: NarrationTrack | null): boolean {
   return hasSegments || (!!track.audioData && !!track.samplingRate && track.duration > 0)
 }
 
-export function getNarrationFrameSample(track: NarrationTrack, sampleIndex: number, sampleRate: number): number {
-  const segmentAudio = track.segments.filter(segment => segment.audioData && (segment.samplingRate ?? sampleRate) === sampleRate)
-  if (segmentAudio.length) {
-    let mixed = 0
-    for (const segment of segmentAudio) {
-      const startFrame = Math.max(0, Math.round((track.startTime + segment.startTime) * sampleRate))
-      const sourceIndex = sampleIndex - startFrame
-      if (sourceIndex >= 0 && sourceIndex < segment.audioData!.length) {
-        mixed += segment.audioData![sourceIndex]
-      }
-    }
-    return Math.max(-1, Math.min(1, mixed))
-  }
-
-  if (!track.audioData || !track.samplingRate) return 0
-  const startFrame = Math.max(0, Math.round(track.startTime * track.samplingRate))
-  const sourceIndex = sampleIndex - startFrame
-  if (sourceIndex < 0 || sourceIndex >= track.audioData.length) return 0
-  return track.audioData[sourceIndex]
-}
-
 export function createNarrationMixdown(track: NarrationTrack): { audioData: Float32Array; sampleRate: number } | null {
   const sampleRate = getNarrationSampleRate(track)
   if (!sampleRate || !hasNarrationAudio(track)) return null
   const endTime = track.startTime + getNarrationDuration(track)
   const totalFrames = Math.max(1, Math.ceil(endTime * sampleRate))
   const audioData = new Float32Array(totalFrames)
-  for (let i = 0; i < totalFrames; i++) {
-    audioData[i] = getNarrationFrameSample(track, i, sampleRate)
+  const segmentAudio = track.segments.filter(segment => segment.audioData && (segment.samplingRate ?? sampleRate) === sampleRate)
+  if (segmentAudio.length) {
+    for (const segment of segmentAudio) {
+      const startFrame = Math.max(0, Math.round((track.startTime + segment.startTime) * sampleRate))
+      const src = segment.audioData!
+      const count = Math.min(src.length, totalFrames - startFrame)
+      for (let i = 0; i < count; i++) audioData[startFrame + i] += src[i]
+    }
+    for (let i = 0; i < totalFrames; i++) {
+      audioData[i] = Math.max(-1, Math.min(1, audioData[i]))
+    }
+  } else if (track.audioData && track.samplingRate) {
+    const startFrame = Math.max(0, Math.round(track.startTime * track.samplingRate))
+    const count = Math.min(track.audioData.length, totalFrames - startFrame)
+    if (count > 0) audioData.set(track.audioData.subarray(0, count), startFrame)
   }
   return { audioData, sampleRate }
 }
