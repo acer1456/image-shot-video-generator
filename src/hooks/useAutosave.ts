@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { ActiveTab, CameraPoint, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
-import { DEFAULT_SUBTITLE_STYLE } from '@/types'
+import type { ActiveTab, CameraPoint, NarrationTrack, SubtitleCue } from '@/types'
 import { clamp, normalizeProjectName } from '@/lib/utils'
+import {
+  normalizeNarrationSegments,
+  normalizeNarrationTrack,
+  normalizeSubtitleCues,
+  normalizeSubtitleStyle,
+} from '@/lib/projectNormalize'
 
 const AUTOSAVE_KEY = 'artful_autosave'
 const AUTOSAVE_DB_NAME = 'artful_autosave_assets'
@@ -63,57 +68,6 @@ interface UseAutosaveOptions {
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
   triggerRedraw: () => void
-}
-
-function normalizeSubtitleStyle(value: unknown): SubtitleStyle {
-  if (!value || typeof value !== 'object') return DEFAULT_SUBTITLE_STYLE
-  const s = value as Record<string, unknown>
-  return {
-    fontFamily: typeof s.fontFamily === 'string' ? s.fontFamily : DEFAULT_SUBTITLE_STYLE.fontFamily,
-    fontSizeRatio: typeof s.fontSizeRatio === 'number' ? s.fontSizeRatio : DEFAULT_SUBTITLE_STYLE.fontSizeRatio,
-    shadowEnabled: typeof s.shadowEnabled === 'boolean' ? s.shadowEnabled : DEFAULT_SUBTITLE_STYLE.shadowEnabled,
-    shadowBlur: typeof s.shadowBlur === 'number' ? s.shadowBlur : DEFAULT_SUBTITLE_STYLE.shadowBlur,
-    shadowOpacity: typeof s.shadowOpacity === 'number' ? s.shadowOpacity : DEFAULT_SUBTITLE_STYLE.shadowOpacity,
-    subtitlePosition: s.subtitlePosition && typeof (s.subtitlePosition as Record<string, unknown>).x === 'number'
-      ? s.subtitlePosition as { x: number; y: number }
-      : DEFAULT_SUBTITLE_STYLE.subtitlePosition,
-  }
-}
-
-function normalizeLegacySegments(value: unknown): NarrationSegment[] {
-  if (!Array.isArray(value)) return []
-  return (value as Partial<NarrationSegment>[]).map(s => ({
-    id: String(s.id ?? crypto.randomUUID()),
-    text: String(s.text ?? ''),
-    startTime: Number(s.startTime ?? 0),
-    duration: Number(s.duration ?? 0),
-    samplingRate: s.samplingRate != null ? Number(s.samplingRate) : undefined,
-    audioData: undefined,
-  }))
-}
-
-function normalizeNarrationAudioSegments(value: unknown, trackId: string, text: string, duration: number): NarrationAudioSegment[] {
-  if (Array.isArray(value)) {
-    return (value as Partial<NarrationAudioSegment>[]).map(segment => ({
-      id: String(segment.id ?? crypto.randomUUID()),
-      text: String(segment.text ?? ''),
-      startTime: Number(segment.startTime ?? 0),
-      duration: Number(segment.duration ?? 0),
-      pauseAfterMs: Number(segment.pauseAfterMs ?? 0),
-      wordStartIndex: Number(segment.wordStartIndex ?? 0),
-      wordEndIndex: Number(segment.wordEndIndex ?? 0),
-    }))
-  }
-  if (duration <= 0) return []
-  return [{
-    id: `${trackId}-segment-0`,
-    text,
-    startTime: 0,
-    duration,
-    pauseAfterMs: 0,
-    wordStartIndex: 0,
-    wordEndIndex: 0,
-  }]
 }
 
 export function useAutosave({
@@ -238,83 +192,9 @@ export function useAutosave({
     }
     if (typeof project.narrationInputText === 'string') setNarrationInputText(project.narrationInputText)
     const legacyStyle = normalizeSubtitleStyle(project.subtitleStyle)
-    const legacySegments = normalizeLegacySegments(project.narrationSegments)
-    const track = project.narrationTrack && typeof project.narrationTrack === 'object'
-      ? project.narrationTrack as Partial<NarrationTrack>
-      : null
-    const trackId = String(track?.id ?? crypto.randomUUID())
-    const trackText = String(track?.text ?? '')
-    const trackDuration = Number(track?.duration ?? 0)
-    setNarrationTrack(track ? {
-      id: trackId,
-      text: trackText,
-      voice: String(track.voice ?? 'af_heart'),
-      speed: Number(track.speed ?? 1),
-      pauseIntensity: Math.max(0, Math.min(6, Math.round(Number(track.pauseIntensity ?? 1)))),
-      startTime: Number(track.startTime ?? 0),
-      duration: trackDuration,
-      audioData: undefined,
-      samplingRate: track.samplingRate != null ? Number(track.samplingRate) : undefined,
-      segments: normalizeNarrationAudioSegments(track.segments, trackId, trackText, trackDuration),
-      words: Array.isArray(track.words) ? track.words.map(w => ({
-        word: String(w.word ?? ''),
-        startTime: Number(w.startTime ?? 0),
-        duration: Number(w.duration ?? 0),
-        segmentId: typeof w.segmentId === 'string' ? w.segmentId : undefined,
-      })) : [],
-      phonemes: Array.isArray(track.phonemes) ? track.phonemes.map(p => ({
-        phoneme: String(p.phoneme ?? ''),
-        startTime: Number(p.startTime ?? 0),
-        duration: Number(p.duration ?? 0),
-        segmentId: typeof p.segmentId === 'string' ? p.segmentId : undefined,
-      })) : [],
-    } : legacySegments.length ? {
-      id: trackId,
-      text: legacySegments.map(s => s.text).join(' '),
-      voice: 'af_heart',
-      speed: 1,
-      pauseIntensity: 1,
-      startTime: 0,
-      duration: legacySegments.reduce((max, s) => Math.max(max, s.startTime + s.duration), 0),
-      audioData: undefined,
-      samplingRate: undefined,
-      segments: legacySegments.map((segment, index) => ({
-        id: segment.id || `${trackId}-segment-${index}`,
-        text: segment.text,
-        startTime: segment.startTime,
-        duration: segment.duration,
-        pauseAfterMs: 0,
-        wordStartIndex: 0,
-        wordEndIndex: 0,
-      })),
-      words: [],
-      phonemes: [],
-    } : null)
-    setSubtitleCues(Array.isArray(project.subtitleCues)
-      ? (project.subtitleCues as Partial<SubtitleCue>[]).map(cue => ({
-        id: String(cue.id ?? crypto.randomUUID()),
-        narrationId: String(cue.narrationId ?? ''),
-        segmentId: typeof cue.segmentId === 'string' ? cue.segmentId : undefined,
-        text: String(cue.text ?? ''),
-        translation: String(cue.translation ?? ''),
-        startTime: Number(cue.startTime ?? 0),
-        duration: Number(cue.duration ?? 0),
-        style: normalizeSubtitleStyle(cue.style),
-        wordStartIndex: Number(cue.wordStartIndex ?? 0),
-        wordEndIndex: Number(cue.wordEndIndex ?? 0),
-      }))
-      : legacySegments.map(s => ({
-        id: crypto.randomUUID(),
-        narrationId: '',
-        segmentId: s.id,
-        text: s.text,
-        translation: '',
-        startTime: s.startTime,
-        duration: s.duration,
-        style: legacyStyle,
-        wordStartIndex: 0,
-        wordEndIndex: 0,
-      })))
+    const legacySegments = normalizeNarrationSegments(project.narrationSegments)
+    setNarrationTrack(normalizeNarrationTrack(project.narrationTrack, legacySegments))
+    setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
     setPendingRestore(null)
     setShowRestoreModal(false)
   }, [pendingRestore, store, triggerRedraw, setNarrationInputText, setNarrationTrack, setSubtitleCues])

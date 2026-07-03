@@ -34,7 +34,7 @@ interface AppToolbarProps {
   onLoadFile: (file: File) => void
   onOpenMasterworkPicker: () => void
   onOpenAiPanel: () => void
-  onRenderVideo: (conv: ChineseConversion, method: VideoRenderMethod) => void
+  onRenderVideo: (conv: ChineseConversion, method: VideoRenderMethod) => void | Promise<void>
   onSave: () => void
   onClearPoints: () => void
   onRequestFullscreen: () => void
@@ -161,6 +161,18 @@ export function AppToolbar({
               onSelect={() => onRenderVideo('cn', renderMethod)}
             >
               下載簡體中文影片
+            </DropdownMenuPrimitive.Item>
+            <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
+            <DropdownMenuPrimitive.Item
+              className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent font-medium"
+              onSelect={async () => {
+                // 批次輸出：依序產生三個語言版本，各自下載
+                for (const conv of ['original', 'tw', 'cn'] as const) {
+                  await onRenderVideo(conv, renderMethod)
+                }
+              }}
+            >
+              批次下載三版本（原文＋繁＋簡）
             </DropdownMenuPrimitive.Item>
           </DropdownMenuPrimitive.Content>
         </DropdownMenuPrimitive.Portal>
