@@ -1,5 +1,6 @@
 import type { NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
+import { decodeAudioB64 } from '@/lib/audioCodec'
 
 // 專案檔 / 自動暫存共用的還原正規化邏輯（useProjectIO 與 useAutosave 各自維護過一份，已合併於此）
 
@@ -32,15 +33,23 @@ export function normalizeNarrationSegments(value: unknown): NarrationSegment[] {
 
 export function normalizeNarrationAudioSegments(value: unknown, trackId: string, text: string, duration: number): NarrationAudioSegment[] {
   if (Array.isArray(value)) {
-    return (value as Partial<NarrationAudioSegment>[]).map(segment => ({
-      id: String(segment.id ?? crypto.randomUUID()),
-      text: String(segment.text ?? ''),
-      startTime: Number(segment.startTime ?? 0),
-      duration: Number(segment.duration ?? 0),
-      pauseAfterMs: Number(segment.pauseAfterMs ?? 0),
-      wordStartIndex: Number(segment.wordStartIndex ?? 0),
-      wordEndIndex: Number(segment.wordEndIndex ?? 0),
-    }))
+    return (value as Array<Partial<NarrationAudioSegment> & { audioB64?: unknown }>).map(segment => {
+      let audioData: Float32Array | undefined
+      if (typeof segment.audioB64 === 'string' && segment.audioB64) {
+        try { audioData = decodeAudioB64(segment.audioB64) } catch { audioData = undefined }
+      }
+      return {
+        id: String(segment.id ?? crypto.randomUUID()),
+        text: String(segment.text ?? ''),
+        startTime: Number(segment.startTime ?? 0),
+        duration: Number(segment.duration ?? 0),
+        audioData,
+        samplingRate: segment.samplingRate != null ? Number(segment.samplingRate) : undefined,
+        pauseAfterMs: Number(segment.pauseAfterMs ?? 0),
+        wordStartIndex: Number(segment.wordStartIndex ?? 0),
+        wordEndIndex: Number(segment.wordEndIndex ?? 0),
+      }
+    })
   }
   if (duration <= 0) return []
   return [{

@@ -59,6 +59,22 @@ function deleteAutosaveImage() {
   return useAutosaveImageStore('readwrite', store => store.delete(AUTOSAVE_IMAGE_KEY))
 }
 
+// 旁白音訊（Float32Array）不能進 localStorage（會被 JSON 展開成巨型物件並超出配額），
+// 改用 IndexedDB 的 structured clone 原生保存整個 track。
+const AUTOSAVE_NARRATION_KEY = 'narration'
+
+function saveAutosaveNarration(track: NarrationTrack) {
+  return useAutosaveImageStore('readwrite', store => store.put(track, AUTOSAVE_NARRATION_KEY))
+}
+
+function loadAutosaveNarration() {
+  return useAutosaveImageStore<NarrationTrack | undefined>('readonly', store => store.get(AUTOSAVE_NARRATION_KEY))
+}
+
+function deleteAutosaveNarration() {
+  return useAutosaveImageStore('readwrite', store => store.delete(AUTOSAVE_NARRATION_KEY))
+}
+
 interface UseAutosaveOptions {
   store: AppStore
   narrationInputText: string
@@ -142,13 +158,19 @@ export function useAutosave({
             startTime: narrationTrack.startTime,
             duration: narrationTrack.duration,
             samplingRate: narrationTrack.samplingRate,
-            segments: narrationTrack.segments,
+            // 音訊本體存 IndexedDB，metadata 只留可 JSON 化的欄位
+            segments: narrationTrack.segments.map(({ audioData: _audio, ...rest }) => rest),
             words: narrationTrack.words,
             phonemes: narrationTrack.phonemes,
           } : null,
           subtitleCues,
         }
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
+        if (narrationTrack) {
+          void saveAutosaveNarration(narrationTrack).catch(err => console.warn('[autosave narration]', err))
+        } else {
+          void deleteAutosaveNarration().catch(() => undefined)
+        }
       } catch (err) {
         console.warn('[autosave]', err)
       }
@@ -193,7 +215,18 @@ export function useAutosave({
     if (typeof project.narrationInputText === 'string') setNarrationInputText(project.narrationInputText)
     const legacyStyle = normalizeSubtitleStyle(project.subtitleStyle)
     const legacySegments = normalizeNarrationSegments(project.narrationSegments)
-    setNarrationTrack(normalizeNarrationTrack(project.narrationTrack, legacySegments))
+    const restoredTrack = normalizeNarrationTrack(project.narrationTrack, legacySegments)
+    // 音訊本體在 IndexedDB；id 相符就用完整版（含 audioData），否則退回 metadata 版
+    let trackWithAudio = restoredTrack
+    if (restoredTrack) {
+      try {
+        const idbTrack = await loadAutosaveNarration()
+        if (idbTrack && idbTrack.id === restoredTrack.id) trackWithAudio = idbTrack
+      } catch (err) {
+        console.warn('[autosave restore narration]', err)
+      }
+    }
+    setNarrationTrack(trackWithAudio)
     setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
     setPendingRestore(null)
     setShowRestoreModal(false)
@@ -202,6 +235,7 @@ export function useAutosave({
   const handleDiscardAutosave = useCallback(() => {
     localStorage.removeItem(AUTOSAVE_KEY)
     void deleteAutosaveImage().catch(err => console.warn('[autosave discard image]', err))
+    void deleteAutosaveNarration().catch(() => undefined)
     setPendingRestore(null)
     setShowRestoreModal(false)
   }, [])

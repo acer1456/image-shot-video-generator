@@ -9,6 +9,7 @@ import {
   normalizeSubtitleCues,
   normalizeSubtitleStyle,
 } from '@/lib/projectNormalize'
+import { encodeAudioB64 } from '@/lib/audioCodec'
 
 interface UseProjectIOOptions {
   narrationInputText: string
@@ -83,7 +84,12 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
           startTime: options.narrationTrack.startTime,
           duration: options.narrationTrack.duration,
           samplingRate: options.narrationTrack.samplingRate,
-          segments: options.narrationTrack.segments,
+          // Float32Array 不能直接進 JSON（會展開成 {"0":..} 巨型物件）；
+          // 改存 base64 Int16 PCM，載入時由 normalizeNarrationAudioSegments 還原
+          segments: options.narrationTrack.segments.map(({ audioData, ...rest }) => ({
+            ...rest,
+            audioB64: audioData ? encodeAudioB64(audioData) : undefined,
+          })),
           words: options.narrationTrack.words,
           phonemes: options.narrationTrack.phonemes,
         } : null,
