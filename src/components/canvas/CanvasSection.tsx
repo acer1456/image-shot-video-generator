@@ -10,7 +10,6 @@ interface CanvasSectionProps {
   isDisabled: boolean
   hasImage: boolean
   activeTab: ActiveTab
-  onTabChange: (tab: 'camera' | 'caption') => void
   onOpenImmersiveMode: () => void
   showAllPoints: boolean
   onlyActiveBox: boolean
@@ -34,7 +33,7 @@ interface CanvasSectionProps {
 }
 
 export function CanvasSection({
-  isDisabled, hasImage, activeTab, onTabChange,
+  isDisabled, hasImage, activeTab,
   onOpenImmersiveMode,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
   showNarrationInOutput, showCameraCaptionsInOutput, onToggle,
@@ -75,33 +74,40 @@ export function CanvasSection({
     setPanY(0)
   }
   return (
-    <div className="flex-1 min-w-0 min-h-0 flex flex-col gap-2">
-      {/* 頂部控制列：獨立於畫布之上，不遮擋預覽畫面 */}
-      <div className="flex-shrink-0 flex items-center justify-center relative h-9">
-        <div className="flex items-center rounded-full bg-card border border-border/60 p-0.5 shadow-sm">
-          {(['camera', 'caption'] as const).map(tab => (
-            <button
-              key={tab}
-              disabled={isDisabled || !hasImage}
-              onClick={() => onTabChange(tab)}
-              className={`h-7 px-4 rounded-full text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                activeTab === tab || (tab === 'camera' && activeTab !== 'caption')
-                  ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab === 'camera' ? '鏡頭' : '字幕'}
-            </button>
-          ))}
+    <div className="flex-1 min-w-0 min-h-0">
+      <div className="relative h-full min-h-0 rounded-2xl border border-border bg-card overflow-hidden flex items-center justify-center">
+        <div style={{ transform: `translate(${panX}px, ${panY}px) scale(${canvasScale})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
+          <CanvasEditor {...canvasEditorProps} />
         </div>
 
-        <div ref={displayOptionsRef} className="absolute right-0 top-0">
+        {/* Pan overlay: above canvas (z-[9]), below UI buttons (z-10) */}
+        {isPanMode && (
+          <div
+            className="absolute inset-0 z-[9] touch-none select-none"
+            style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+            onPointerDown={e => {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              panDragRef.current = { startX: e.clientX, startY: e.clientY, basePanX: panX, basePanY: panY }
+              setIsPanning(true)
+            }}
+            onPointerMove={e => {
+              if (!panDragRef.current) return
+              setPanX(panDragRef.current.basePanX + e.clientX - panDragRef.current.startX)
+              setPanY(panDragRef.current.basePanY + e.clientY - panDragRef.current.startY)
+            }}
+            onPointerUp={() => { panDragRef.current = null; setIsPanning(false) }}
+            onPointerCancel={() => { panDragRef.current = null; setIsPanning(false) }}
+          />
+        )}
+
+        {/* 顯示選項：僅單一小圖示置於右上角，不佔用畫布空間 */}
+        <div ref={displayOptionsRef} className="absolute top-2 right-2 z-10">
           <button
             onClick={() => setShowDisplayOptions(v => !v)}
-            className={`h-8 w-8 rounded-full flex items-center justify-center border shadow-sm transition-colors ${
+            className={`h-8 w-8 rounded-full flex items-center justify-center backdrop-blur-md border shadow-lg transition-colors ${
               showDisplayOptions
                 ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-card border-border/60 text-muted-foreground hover:text-foreground'
+                : 'bg-card/80 border-border/60 text-muted-foreground hover:text-foreground'
             }`}
             title="顯示選項"
           >
@@ -164,32 +170,6 @@ export function CanvasSection({
             </div>
           )}
         </div>
-      </div>
-
-      <div className="relative flex-1 min-h-[320px] lg:min-h-0 rounded-2xl border border-border bg-card overflow-hidden flex items-center justify-center">
-        <div style={{ transform: `translate(${panX}px, ${panY}px) scale(${canvasScale})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
-          <CanvasEditor {...canvasEditorProps} />
-        </div>
-
-        {/* Pan overlay: above canvas (z-[9]), below UI buttons (z-10) */}
-        {isPanMode && (
-          <div
-            className="absolute inset-0 z-[9] touch-none select-none"
-            style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
-            onPointerDown={e => {
-              e.currentTarget.setPointerCapture(e.pointerId)
-              panDragRef.current = { startX: e.clientX, startY: e.clientY, basePanX: panX, basePanY: panY }
-              setIsPanning(true)
-            }}
-            onPointerMove={e => {
-              if (!panDragRef.current) return
-              setPanX(panDragRef.current.basePanX + e.clientX - panDragRef.current.startX)
-              setPanY(panDragRef.current.basePanY + e.clientY - panDragRef.current.startY)
-            }}
-            onPointerUp={() => { panDragRef.current = null; setIsPanning(false) }}
-            onPointerCancel={() => { panDragRef.current = null; setIsPanning(false) }}
-          />
-        )}
 
         {/* Viewport zoom controls */}
         <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg bg-secondary/80 backdrop-blur-sm border border-border/50 p-0.5">

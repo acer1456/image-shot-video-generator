@@ -570,6 +570,8 @@ function AppInner() {
         points={store.points}
         backgroundSettings={store.backgroundSettings}
         projectName={store.projectName}
+        activeTab={store.activeTab}
+        onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
         onProjectNameChange={name => store.setProjectName(normalizeProjectName(name))}
@@ -606,7 +608,6 @@ function AppInner() {
             isDisabled={isDisabled}
             hasImage={!!store.image}
             activeTab={store.activeTab}
-            onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
             onOpenImmersiveMode={openImmersiveMode}
             showAllPoints={store.showAllPoints}
             onlyActiveBox={store.onlyActiveBox}

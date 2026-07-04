@@ -14,7 +14,7 @@ import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
 import type { VideoRenderMethod } from '@/hooks/useVideoRender'
 import ScreenDownload from '@/components/ScreenDownload'
-import type { BackgroundSettings, CameraPoint } from '@/types'
+import type { ActiveTab, BackgroundSettings, CameraPoint } from '@/types'
 
 
 interface AppToolbarProps {
@@ -28,6 +28,8 @@ interface AppToolbarProps {
   points: CameraPoint[]
   backgroundSettings: BackgroundSettings
   projectName: string
+  activeTab: ActiveTab
+  onTabChange: (tab: 'camera' | 'caption') => void
   fileInputRef: React.RefObject<HTMLInputElement>
   loadProjectInputRef: React.RefObject<HTMLInputElement>
   onProjectNameChange: (name: string) => void
@@ -45,6 +47,7 @@ interface AppToolbarProps {
 export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
   hasImage, hasPoints, image, points, backgroundSettings, projectName,
+  activeTab, onTabChange,
   fileInputRef, loadProjectInputRef,
   onProjectNameChange, onImageFile, onOverlayImageFile, onLoadFile,
   onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
@@ -122,6 +125,24 @@ export function AppToolbar({
           }}
         />
       )}
+
+      {/* 鏡頭 / 字幕 切換（置於工具列，不佔用畫布空間） */}
+      <div className="flex items-center rounded-full bg-secondary/70 p-0.5 ml-1 flex-shrink-0">
+        {(['camera', 'caption'] as const).map(tab => (
+          <button
+            key={tab}
+            disabled={isDisabled || !hasImage}
+            onClick={() => onTabChange(tab)}
+            className={`h-7 px-3 rounded-full text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+              activeTab === tab || (tab === 'camera' && activeTab !== 'caption')
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab === 'camera' ? '鏡頭' : '字幕'}
+          </button>
+        ))}
+      </div>
 
       {/* Render progress */}
       {isRendering && (
