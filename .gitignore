@@ -31,6 +31,7 @@ public/sw.js
 public/workbox-*.js
 
 # Project-specific
+.superpowers/
 .github/instructions/
 .github/skills/
 AGENTS.md
