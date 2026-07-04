@@ -16,7 +16,8 @@ import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, NarrationTrack, SubtitleCue } from '@/types'
+import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
+import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
 import { normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
@@ -52,6 +53,8 @@ function AppInner() {
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(false)
   const [narrationTrack, setNarrationTrack] = useState<NarrationTrack | null>(null)
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
+  const [imageOverlays, setImageOverlays] = useState<ImageOverlay[]>([])
+  const [overlaysLocked, setOverlaysLocked] = useState(false)
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
   const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
@@ -80,18 +83,26 @@ function AppInner() {
     narrationInputText,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
+    overlaysLocked,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
+    setImageOverlays,
+    setOverlaysLocked,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
     narrationInputText,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
+    overlaysLocked,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
+    setImageOverlays,
+    setOverlaysLocked,
     triggerRedraw,
   })
 
@@ -101,8 +112,9 @@ function AppInner() {
     const subtitleEnd = store.showNarrationInOutput
       ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       : 0
-    return Math.max(td, narrationEnd, subtitleEnd)
-  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues])
+    const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
+    return Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
+  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues, imageOverlays])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -118,9 +130,44 @@ function AppInner() {
     triggerRedraw,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
     showNarration: store.showNarrationInOutput,
     showCameraCaptions: store.showCameraCaptionsInOutput,
   })
+
+  // ---------- 疊加圖片 ----------
+  const handleOverlayImageFile = useCallback(async (file: File) => {
+    try {
+      const dataUrl = await fileToOverlayDataUrl(file)
+      const overlay: ImageOverlay = {
+        id: crypto.randomUUID(),
+        name: file.name.replace(/\.[^.]+$/, '') || '圖片',
+        dataUrl,
+        x: 0.5,
+        y: 0.35,
+        scale: 0.4,
+        opacity: 1,
+        startTime: Math.max(0, currentTimeRef.current),
+        duration: 4,
+      }
+      getOverlayImage(overlay, triggerRedraw)
+      setImageOverlays(prev => [...prev, overlay])
+      triggerRedraw()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '疊加圖片載入失敗')
+    }
+  }, [triggerRedraw])
+
+  const handleOverlayChange = useCallback((id: string, patch: Partial<ImageOverlay>) => {
+    setImageOverlays(prev => prev.map(overlay => overlay.id === id ? { ...overlay, ...patch } : overlay))
+    triggerRedraw()
+  }, [triggerRedraw])
+
+  const handleImageOverlaysChange = useCallback((overlays: ImageOverlay[]) => {
+    for (const overlay of overlays) getOverlayImage(overlay, triggerRedraw)
+    setImageOverlays(overlays)
+    triggerRedraw()
+  }, [triggerRedraw])
 
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
     const canvas = getCanvas()
@@ -133,8 +180,8 @@ function AppInner() {
     const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
     const narrationText = getSubtitleRenderText(cue)
     const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style)
-  }, [getCanvas, store, snapGuide, subtitleCues])
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false)
+  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
     const { items } = buildTimeline(store.points)
@@ -467,6 +514,9 @@ function AppInner() {
     narrationText: getSubtitleRenderText(currentSubtitleCue) || undefined,
     subtitleStyle: currentSubtitleCue?.style,
     onSubtitlePositionChange: updateActiveSubtitleStyle,
+    imageOverlays,
+    overlaysLocked,
+    onOverlayChange: handleOverlayChange,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
   return (
@@ -486,6 +536,7 @@ function AppInner() {
         loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
         onProjectNameChange={name => store.setProjectName(normalizeProjectName(name))}
         onImageFile={file => store.loadImageFile(file, !store.image, store.imageUrl)}
+        onOverlayImageFile={handleOverlayImageFile}
         onLoadFile={loadProject}
         onOpenMasterworkPicker={() => setIsMasterworkPickerOpen(true)}
         onOpenAiPanel={() => setIsAiPanelOpen(true)}
@@ -634,6 +685,10 @@ function AppInner() {
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             onSubtitleSelect={setActiveSubtitleId}
+            imageOverlays={imageOverlays}
+            onImageOverlaysChange={handleImageOverlaysChange}
+            overlaysLocked={overlaysLocked}
+            onToggleOverlaysLocked={() => setOverlaysLocked(v => !v)}
           />
         </div>
       </div>

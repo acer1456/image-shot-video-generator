@@ -2,12 +2,12 @@ import { useMemo, useCallback, useRef, useEffect, useLayoutEffect, forwardRef, u
 import { Timeline } from '@xzdarcy/react-timeline-editor'
 import type { TimelineState } from '@xzdarcy/react-timeline-editor'
 import type { TimelineRow, TimelineEffect, TimelineAction } from '@xzdarcy/timeline-engine'
-import type { CameraPoint, NarrationTrack, SubtitleCue } from '@/types'
+import type { CameraPoint, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { formatTime } from '@/lib/utils'
 import { buildTimeline } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
-import { Play, Pause, ChevronsUpDown, ChevronsDownUp, Trash2 } from 'lucide-react'
+import { Play, Pause, ChevronsUpDown, ChevronsDownUp, Trash2, Lock, LockOpen } from 'lucide-react'
 
 // Extended action type that carries our app-specific metadata
 type RichAction = TimelineAction & {
@@ -18,6 +18,7 @@ type RichAction = TimelineAction & {
     trackId?: string
     cueId?: string
     segmentId?: string
+    overlayId?: string
     waveform?: number[]
   }
 }
@@ -35,21 +36,24 @@ const EFFECTS: Record<string, TimelineEffect> = {
   music:     { id: 'music',     name: '音樂' },
   narration: { id: 'narration', name: '旁白' },
   subtitle:  { id: 'subtitle',  name: '字幕' },
+  overlay:   { id: 'overlay',   name: '圖片' },
 }
 
 const ROW_CAMERA    = 'row-camera'
 const ROW_NARRATION = 'row-narration'
 const ROW_SUBTITLE  = 'row-subtitle'
 const ROW_MUSIC     = 'row-music'
+const ROW_OVERLAY   = 'row-overlay'
 
 const ROW_LABELS: Record<string, string> = {
   [ROW_CAMERA]:    '鏡頭',
   [ROW_NARRATION]: '旁白',
   [ROW_SUBTITLE]:  '字幕',
   [ROW_MUSIC]:     '音樂',
+  [ROW_OVERLAY]:   '圖片',
 }
 
-const NUM_ROWS = 4
+const NUM_ROWS = 5
 
 /** Pixels rendered for 1-second scale mark */
 const SCALE_WIDTH  = 80
@@ -63,6 +67,7 @@ const ROW_HEIGHT_EXPANDED = 72
 const SCALE_HEIGHT = 28
 
 function getActionColors(effectId: string, rowId: string): { bg: string; fg: string } {
+  if (rowId === ROW_OVERLAY)   return { bg: 'rgba(236,72,153,.85)',  fg: '#ffffff' }
   if (rowId === ROW_MUSIC)     return { bg: 'rgba(168,85,247,.82)',  fg: '#ffffff' }
   if (rowId === ROW_NARRATION) return { bg: 'rgba(251,146,60,.88)',  fg: '#ffffff' }
   if (rowId === ROW_SUBTITLE)  return { bg: 'rgba(14,165,233,.86)',  fg: '#ffffff' }
@@ -111,6 +116,10 @@ interface TimelinePanelProps {
   subtitleCues?:               SubtitleCue[]
   onSubtitleCuesChange?:       (cues: SubtitleCue[]) => void
   onSubtitleSelect?:           (id: string) => void
+  imageOverlays?:              ImageOverlay[]
+  onImageOverlaysChange?:      (overlays: ImageOverlay[]) => void
+  overlaysLocked?:             boolean
+  onToggleOverlaysLocked?:     () => void
 }
 
 export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function TimelinePanel({
@@ -118,6 +127,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   expanded = false, onToggleExpanded,
   onTimeChange, onPointSelect, onHoldDurationChange, onMoveDurationChange, onPlay, onPause,
   narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange, onSubtitleSelect,
+  imageOverlays, onImageOverlaysChange, overlaysLocked = false, onToggleOverlaysLocked,
 }, ref) {
   const { resolvedTheme } = useTheme()
   const isDark      = resolvedTheme === 'dark'
@@ -127,7 +137,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const pendingScrollLeftRef = useRef<number | null>(null)
 
   // ── Row order + local music state ────────────────────────────────────────
-  const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_NARRATION, ROW_SUBTITLE, ROW_MUSIC])
+  const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_OVERLAY, ROW_NARRATION, ROW_SUBTITLE, ROW_MUSIC])
   const [localMusic, setLocalMusic] = useState<TimelineAction[]>([])
   // Incrementing forces editorData useMemo to recompute → camera/narration blocks snap back
   const [snapKey, setSnapKey]       = useState(0)
@@ -241,6 +251,19 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     } as RichAction as TimelineAction]
   }, [narrationTrack])
 
+  const overlayActions = useMemo<TimelineAction[]>(() =>
+    (imageOverlays ?? []).map((overlay, i) => ({
+      id:       `overlay-${overlay.id}`,
+      start:    overlay.startTime,
+      end:      overlay.startTime + overlay.duration,
+      effectId: 'overlay',
+      movable:  !overlaysLocked,
+      flexible: !overlaysLocked,
+      data: { label: overlay.name || `圖片 ${i + 1}`, pointIndex: i, type: 'overlay', overlayId: overlay.id },
+    } as RichAction as TimelineAction)),
+    [imageOverlays, overlaysLocked],
+  )
+
   const subtitleActions = useMemo<TimelineAction[]>(() =>
     (subtitleCues ?? []).map((cue, i) => ({
       id:       `subtitle-${cue.id}`,
@@ -261,9 +284,10 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       [ROW_NARRATION]: { id: ROW_NARRATION, actions: narrationActions },
       [ROW_SUBTITLE]:  { id: ROW_SUBTITLE,  actions: subtitleActions },
       [ROW_MUSIC]:     { id: ROW_MUSIC,     actions: localMusic },
+      [ROW_OVERLAY]:   { id: ROW_OVERLAY,   actions: overlayActions },
     }
     return rowOrder.map(id => rowMap[id])
-  }, [cameraActions, narrationActions, subtitleActions, localMusic, rowOrder])
+  }, [cameraActions, narrationActions, subtitleActions, localMusic, overlayActions, rowOrder])
 
   // react-timeline-editor 1.0 uses react-virtualized's forceUpdate when
   // editorData changes, which can recurse under React 19. Remount only when
@@ -363,9 +387,10 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         if (dir === 'left') return false
       }
       if (row.id === ROW_NARRATION) return false
+      if (row.id === ROW_OVERLAY && overlaysLocked) return false
       return undefined
     },
-    [],
+    [overlaysLocked],
   )
 
   const handleResizeEnd = useCallback(
@@ -385,13 +410,22 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
             cue.id === cueId ? { ...cue, startTime: start, duration: newDuration } : cue
           ))
         }
+      } else if (row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
+        const overlayId = rich.data?.overlayId
+        if (overlayId) {
+          onImageOverlaysChange(imageOverlays.map(overlay =>
+            overlay.id === overlayId
+              ? { ...overlay, startTime: Math.max(0, start), duration: Math.max(0.2, end - start) }
+              : overlay
+          ))
+        }
       } else if (row.id === ROW_MUSIC) {
         setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
       } else {
         setSnapKey(k => k + 1)
       }
     },
-    [onHoldDurationChange, onMoveDurationChange, subtitleCues, onSubtitleCuesChange],
+    [onHoldDurationChange, onMoveDurationChange, subtitleCues, onSubtitleCuesChange, imageOverlays, onImageOverlaysChange],
   )
 
   const handleMoveEnd = useCallback(
@@ -417,6 +451,15 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
             cue.id === cueId ? { ...cue, startTime: start, duration: Math.max(0.1, duration) } : cue
           ))
         }
+      } else if (row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
+        const overlayId = rich.data?.overlayId
+        if (overlayId) {
+          onImageOverlaysChange(imageOverlays.map(overlay =>
+            overlay.id === overlayId
+              ? { ...overlay, startTime: Math.max(0, start), duration: Math.max(0.2, end - start) }
+              : overlay
+          ))
+        }
       } else if (row.id === ROW_MUSIC) {
         setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
       } else {
@@ -424,7 +467,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         setSnapKey(k => k + 1)
       }
     },
-    [narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange],
+    [narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange, imageOverlays, onImageOverlaysChange],
   )
 
   const handleRowDragEnd = useCallback(
@@ -518,9 +561,17 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
           if (!window.confirm('確定要刪除這個字幕嗎？')) return
           onSubtitleCuesChange(subtitleCues.filter(cue => cue.id !== cueId))
         }
+      } else if (params.row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
+        if (overlaysLocked) return
+        const rich = params.action as RichAction
+        const overlayId = rich.data?.overlayId
+        if (overlayId) {
+          if (!window.confirm('確定要刪除這張疊加圖片嗎？')) return
+          onImageOverlaysChange(imageOverlays.filter(overlay => overlay.id !== overlayId))
+        }
       }
     },
-    [narrationTrack, onNarrationTrackChange, onSubtitleCuesChange, subtitleCues],
+    [narrationTrack, onNarrationTrackChange, onSubtitleCuesChange, subtitleCues, imageOverlays, onImageOverlaysChange, overlaysLocked],
   )
 
   const handleClearNarrationRow = useCallback((event: React.MouseEvent) => {
@@ -543,7 +594,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const borderCol  = isDark ? 'hsl(217.2 32.6% 17.5%)'    : 'hsl(214.3 31.8% 91.4%)'
   const scaleFg    = isDark ? 'rgba(255,255,255,.40)'      : 'rgba(0,0,0,.38)'
 
-  const hasContent = points.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0
+  const hasContent = points.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0 || (imageOverlays?.length ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-2 select-none" style={{ margin: '-10px' }}>
@@ -625,6 +676,15 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                       onClick={handleClearSubtitleRow}
                     >
                       <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                  {id === ROW_OVERLAY && onToggleOverlaysLocked && (
+                    <button
+                      className={`pointer-events-auto h-5 w-5 rounded flex items-center justify-center hover:bg-muted transition-colors ${overlaysLocked ? 'text-amber-500' : ''}`}
+                      title={overlaysLocked ? '解鎖圖片列（可在畫布拖曳）' : '鎖定圖片列（畫布不可選取）'}
+                      onClick={event => { event.stopPropagation(); onToggleOverlaysLocked() }}
+                    >
+                      {overlaysLocked ? <Lock className="h-3 w-3" /> : <LockOpen className="h-3 w-3" />}
                     </button>
                   )}
                 </div>

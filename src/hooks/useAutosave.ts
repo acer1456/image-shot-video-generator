@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { ActiveTab, CameraPoint, NarrationTrack, SubtitleCue } from '@/types'
+import type { ActiveTab, CameraPoint, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
 import { clamp, normalizeProjectName } from '@/lib/utils'
 import {
+  normalizeImageOverlays,
   normalizeNarrationSegments,
   normalizeNarrationTrack,
   normalizeSubtitleCues,
@@ -80,9 +81,13 @@ interface UseAutosaveOptions {
   narrationInputText: string
   narrationTrack: NarrationTrack | null
   subtitleCues: SubtitleCue[]
+  imageOverlays?: ImageOverlay[]
+  overlaysLocked?: boolean
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
+  setImageOverlays?: Dispatch<SetStateAction<ImageOverlay[]>>
+  setOverlaysLocked?: Dispatch<SetStateAction<boolean>>
   triggerRedraw: () => void
 }
 
@@ -91,9 +96,13 @@ export function useAutosave({
   narrationInputText,
   narrationTrack,
   subtitleCues,
+  imageOverlays,
+  overlaysLocked,
   setNarrationInputText,
   setNarrationTrack,
   setSubtitleCues,
+  setImageOverlays,
+  setOverlaysLocked,
   triggerRedraw,
 }: UseAutosaveOptions) {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -164,6 +173,8 @@ export function useAutosave({
             phonemes: narrationTrack.phonemes,
           } : null,
           subtitleCues,
+          imageOverlays: imageOverlays ?? [],
+          overlaysLocked: overlaysLocked ?? false,
         }
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
         if (narrationTrack) {
@@ -176,7 +187,7 @@ export function useAutosave({
       }
     }, 2000)
     return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current) }
-  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText])
+  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText, imageOverlays, overlaysLocked])
 
   const handleRestoreAutosave = useCallback(async () => {
     if (!pendingRestore) return
@@ -227,6 +238,8 @@ export function useAutosave({
       }
     }
     setNarrationTrack(trackWithAudio)
+    setImageOverlays?.(normalizeImageOverlays(project.imageOverlays))
+    setOverlaysLocked?.(project.overlaysLocked === true)
     setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
     setPendingRestore(null)
     setShowRestoreModal(false)

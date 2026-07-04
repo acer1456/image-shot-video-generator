@@ -1,4 +1,5 @@
-import type { CameraPoint, CaptionData, BackgroundSettings, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, SubtitleStyle } from '@/types'
+import { drawOverlays } from './overlays'
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
@@ -210,7 +211,10 @@ export function drawCamera(
   snapGuide: { x: boolean; y: boolean },
   activeCaptionIndex = 0,
   narrationText?: string,
-  subtitleStyle?: SubtitleStyle
+  subtitleStyle?: SubtitleStyle,
+  overlays?: ImageOverlay[],
+  overlayTime?: number,
+  overlayGuides?: boolean
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
@@ -228,6 +232,9 @@ export function drawCamera(
     const dw = (iw / src.sw) * canvas.width
     const dh = (ih / src.sh) * canvas.height
     ctx.drawImage(image, ix, iy, iw, ih, dx, dy, dw, dh)
+  }
+  if (overlays?.length && overlayTime != null) {
+    drawOverlays(canvas, ctx, overlays, overlayTime, { guides: overlayGuides })
   }
   if (captionPoint) {
     getAllCaptions(captionPoint).forEach((cap, i) => {

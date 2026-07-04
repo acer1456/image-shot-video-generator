@@ -1,4 +1,4 @@
-import type { NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import type { ImageOverlay, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { decodeAudioB64 } from '@/lib/audioCodec'
 
@@ -24,6 +24,24 @@ export function normalizeSubtitleStyle(value: unknown): SubtitleStyle {
     backgroundEnabled: typeof s.backgroundEnabled === 'boolean' ? s.backgroundEnabled : DEFAULT_SUBTITLE_STYLE.backgroundEnabled,
     backgroundOpacity: typeof s.backgroundOpacity === 'number' ? s.backgroundOpacity : DEFAULT_SUBTITLE_STYLE.backgroundOpacity,
   }
+}
+
+export function normalizeImageOverlays(value: unknown): ImageOverlay[] {
+  if (!Array.isArray(value)) return []
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Number.isFinite(v) ? v : min))
+  return (value as Partial<ImageOverlay>[])
+    .filter(overlay => typeof overlay?.dataUrl === 'string' && overlay.dataUrl.startsWith('data:image/'))
+    .map(overlay => ({
+      id: String(overlay.id ?? crypto.randomUUID()),
+      name: String(overlay.name ?? '圖片'),
+      dataUrl: String(overlay.dataUrl),
+      x: clamp(Number(overlay.x ?? 0.5), 0, 1),
+      y: clamp(Number(overlay.y ?? 0.5), 0, 1),
+      scale: clamp(Number(overlay.scale ?? 0.4), 0.05, 1.5),
+      opacity: clamp(Number(overlay.opacity ?? 1), 0, 1),
+      startTime: Math.max(0, Number(overlay.startTime ?? 0)),
+      duration: Math.max(0.2, Number(overlay.duration ?? 4)),
+    }))
 }
 
 export function normalizeNarrationSegments(value: unknown): NarrationSegment[] {

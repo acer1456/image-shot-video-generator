@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
-  Maximize, Upload, ChevronDown, Sparkles, Palette, Loader2,
+  Maximize, Upload, ChevronDown, Sparkles, Palette, Loader2, ImagePlus,
 } from 'lucide-react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { normalizeProjectName } from '@/lib/utils'
@@ -31,6 +31,7 @@ interface AppToolbarProps {
   loadProjectInputRef: React.RefObject<HTMLInputElement>
   onProjectNameChange: (name: string) => void
   onImageFile: (file: File, isFirst: boolean) => void
+  onOverlayImageFile?: (file: File) => void
   onLoadFile: (file: File) => void
   onOpenMasterworkPicker: () => void
   onOpenAiPanel: () => void
@@ -44,11 +45,12 @@ export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
   hasImage, hasPoints, image, points, backgroundSettings, projectName,
   fileInputRef, loadProjectInputRef,
-  onProjectNameChange, onImageFile, onLoadFile,
+  onProjectNameChange, onImageFile, onOverlayImageFile, onLoadFile,
   onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
   onSave, onClearPoints, onRequestFullscreen,
 }: AppToolbarProps) {
   const { theme, setTheme } = useTheme()
+  const overlayInputRef = useRef<HTMLInputElement>(null)
   const [renderMethod, setRenderMethod] = useState<VideoRenderMethod>('mediaRecorder')
   const supportsWebCodecs =
     typeof window !== 'undefined' &&
@@ -81,6 +83,33 @@ export function AppToolbar({
           e.target.value = ''
         }}
       />
+
+      {/* Overlay image upload */}
+      {onOverlayImageFile && (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => overlayInputRef.current?.click()}
+            disabled={isDisabled || !hasImage}
+            title="加入疊加圖片（顯示於時間軸圖片列，可在畫布拖曳）"
+          >
+            <ImagePlus className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">疊加圖片</span>
+          </Button>
+          <input
+            ref={overlayInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) onOverlayImageFile(file)
+              e.target.value = ''
+            }}
+          />
+        </>
+      )}
 
       {/* Masterwork picker */}
       <Button

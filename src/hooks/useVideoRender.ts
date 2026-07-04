@@ -5,7 +5,7 @@ import type { AppStore } from '@/hooks/useAppStore'
 import { buildTimeline, drawCamera as doDrawCamera, getTimelineStateAt } from '@/lib/canvas'
 import { OUTPUT_W, OUTPUT_H, sanitizeFileName, getTodayString, wait } from '@/lib/utils'
 import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from '@/lib/chinese'
-import type { NarrationTrack, SubtitleCue } from '@/types'
+import type { ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
 import {
   createNarrationMixdown,
   getActiveSubtitleCue,
@@ -28,6 +28,7 @@ interface UseVideoRenderOptions {
   triggerRedraw: () => void
   narrationTrack: NarrationTrack | null
   subtitleCues: SubtitleCue[]
+  imageOverlays?: ImageOverlay[]
   showNarration: boolean
   showCameraCaptions: boolean
 }
@@ -79,6 +80,7 @@ export function useVideoRender({
   triggerRedraw,
   narrationTrack,
   subtitleCues,
+  imageOverlays = [],
   showNarration,
   showCameraCaptions,
 }: UseVideoRenderOptions) {
@@ -104,7 +106,8 @@ export function useVideoRender({
       const renderNarrationTrack = showNarration ? narrationTrack : null
       const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + getNarrationDuration(renderNarrationTrack) : 0
       const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
-      const renderDuration = Math.max(td, narrationEnd, subtitleEnd)
+      const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
+      const renderDuration = Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
       const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
 
       // Dedicated offscreen canvas — completely isolated from the editor canvas.
@@ -129,9 +132,9 @@ export function useVideoRender({
         const cue = getActiveSubtitleCue(renderSubtitleCues, t)
         const narText = getSubtitleRenderText(cue) || undefined
         const captionPoint = showCameraCaptions ? state.captionPoint : null
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false)
         if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false)
         }
       }
 
@@ -156,7 +159,7 @@ export function useVideoRender({
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues, showNarration, showCameraCaptions])
+  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues, imageOverlays, showNarration, showCameraCaptions])
 
   return { renderVideo, renderProgress }
 }

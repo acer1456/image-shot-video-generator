@@ -36,6 +36,19 @@ export interface CameraPoint {
   extraCaptions?: CaptionData[]
 }
 
+// 疊加圖片：以輸出畫面（canvas）座標定位的貼圖，如 NLE 的 PiP 層
+export interface ImageOverlay {
+  id: string
+  name: string
+  dataUrl: string
+  x: number          // 中心點，0–1（輸出畫面座標）
+  y: number
+  scale: number      // 寬度 = scale × 輸出寬
+  opacity: number    // 0–1
+  startTime: number  // 秒
+  duration: number   // 秒
+}
+
 export interface BackgroundSettings {
   mode: 'color' | 'blur'
   color: string
@@ -81,11 +94,12 @@ export interface ProjectData {
 }
 
 export interface DragState {
-  type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove'
+  type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove' | 'overlayMove' | 'overlayResize'
   index: number
   captionIndex?: number  // 0 = primary caption, 1+ = extraCaptions[captionIndex-1]
   offsetX?: number       // image-space offset for move-handle drag
   offsetY?: number
+  overlayId?: string     // for overlayMove / overlayResize
 }
 
 export interface SnapGuide {
