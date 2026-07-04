@@ -546,8 +546,8 @@ function AppInner() {
         onRequestFullscreen={requestFullscreen}
       />
 
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-3">
-        <div className="flex flex-1 min-h-0 overflow-hidden gap-3">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-2 gap-2">
+        <div className="flex flex-1 min-h-0 overflow-hidden gap-2">
           <NarrationSidebar
             track={narrationTrack}
             onTrackChange={handleNarrationTrackChange}
@@ -651,7 +651,7 @@ function AppInner() {
           />
         </div>
 
-        <div className="flex-shrink-0 rounded-xl border border-border bg-card p-3">
+        <div className="flex-shrink-0 rounded-lg border border-border bg-card p-3">
           <TimelinePanel
             ref={timelinePanelRef}
             points={store.points}
@@ -744,7 +744,7 @@ function AppInner() {
 
 export default function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="artful-theme">
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} storageKey="artful-theme">
       <AppInner />
     </ThemeProvider>
   )

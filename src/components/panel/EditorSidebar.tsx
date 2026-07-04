@@ -79,7 +79,9 @@ export function EditorSidebar({
           <Button variant="ghost" size="icon" className="h-7 w-7" title="收合鏡頭面板" onClick={onToggleCollapse}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-          <h2 className="text-base font-bold">{activeIndex >= 0 ? `目前鏡頭： ${activeIndex + 1}` : '目前未選擇鏡頭'}</h2>
+          <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-foreground/90">
+            {activeIndex >= 0 ? `鏡頭 ${activeIndex + 1} · Inspector` : '鏡頭 Inspector'}
+          </h2>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" title="輸出設定" onClick={() => setIsSettingsOpen(true)}>
               <Settings className="h-4 w-4" />

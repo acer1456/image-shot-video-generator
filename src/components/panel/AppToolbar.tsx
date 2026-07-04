@@ -58,11 +58,16 @@ export function AppToolbar({
     'VideoFrame' in window
 
   return (
-    <header className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm flex-shrink-0">
+    <header className="flex items-center gap-1.5 px-3 h-11 border-b border-border bg-card flex-shrink-0">
       {/* Branding */}
-      <div className="flex-shrink-0 flex flex-col mr-1 leading-tight">
-        <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground whitespace-nowrap">9:16 Video Studio</span>
-        <span className="text-sm font-extrabold whitespace-nowrap">畫作鏡頭影片產生器</span>
+      <div className="flex-shrink-0 flex items-center gap-2 mr-1.5 leading-none select-none">
+        <span className="h-6 w-6 rounded bg-primary/15 text-primary flex items-center justify-center">
+          <Film className="h-3.5 w-3.5" />
+        </span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-bold whitespace-nowrap tracking-wide">畫作鏡頭影片產生器</span>
+          <span className="text-[8px] font-semibold uppercase tracking-[0.18em] text-muted-foreground whitespace-nowrap">9:16 Video Studio</span>
+        </div>
       </div>
 
       <Separator orientation="vertical" className="h-8" />

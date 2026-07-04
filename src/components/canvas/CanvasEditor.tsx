@@ -103,8 +103,8 @@ export default function CanvasEditor({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const isDark = resolvedTheme === 'dark'
-    const canvasBg = isDark ? '#030712' : '#f1f5f9'
-    const textMuted = isDark ? '#94a3b8' : '#64748b'
+    const canvasBg = isDark ? '#0e0e10' : '#e9ebee'
+    const textMuted = isDark ? '#8b8f96' : '#64748b'
 
     if (!image) {
       ctx.fillStyle = canvasBg

@@ -589,9 +589,9 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   }, [onSubtitleCuesChange, subtitleCues])
 
   // ── Theme-aware colours ────────────────────────────────────────────────
-  const labelBg    = isDark ? 'hsl(217.2 32.6% 8%)'       : 'hsl(0 0% 100%)'
+  const labelBg    = 'hsl(var(--card))'
   const labelColor = isDark ? 'rgba(255,255,255,.50)'      : 'rgba(0,0,0,.45)'
-  const borderCol  = isDark ? 'hsl(217.2 32.6% 17.5%)'    : 'hsl(214.3 31.8% 91.4%)'
+  const borderCol  = 'hsl(var(--border))'
   const scaleFg    = isDark ? 'rgba(255,255,255,.40)'      : 'rgba(0,0,0,.38)'
 
   const hasContent = points.length > 0 || localMusic.length > 0 || !!narrationTrack || (subtitleCues?.length ?? 0) > 0 || (imageOverlays?.length ?? 0) > 0
@@ -600,7 +600,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     <div className="flex flex-col gap-2 select-none" style={{ margin: '-10px' }}>
       {/* ── Header ── */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground px-1">
-        <span className="font-semibold text-foreground">預覽時間軸</span>
+        <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-foreground/90">時間軸 Timeline</span>
         <button
           className="flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-primary font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           disabled={isDisabled || points.length === 0}
