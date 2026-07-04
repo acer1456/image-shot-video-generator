@@ -332,16 +332,12 @@ export function NarrationSidebar({
   if (collapsed) {
     return (
       <div
-        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
-        style={{ width: 36 }}
+        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-row lg:flex-col items-center justify-between lg:justify-between px-4 py-2 lg:py-4 cursor-pointer select-none w-full lg:w-9"
         onClick={onToggleCollapse}
         title="展開旁白面板"
       >
-        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-        <span
-          className="text-[11px] font-semibold text-muted-foreground"
-          style={{ writingMode: 'vertical-rl', textOrientation: 'upright', letterSpacing: 2 }}
-        >
+        <ChevronRight className="h-4 w-4 text-muted-foreground rotate-90 lg:rotate-0" />
+        <span className="text-[12px] font-semibold text-muted-foreground lg:[writing-mode:vertical-rl] lg:[text-orientation:upright] lg:tracking-[2px]">
           旁白
         </span>
         <Mic className="h-4 w-4 text-muted-foreground" />
@@ -352,7 +348,7 @@ export function NarrationSidebar({
   const cueStyle = activeCue?.style ?? DEFAULT_SUBTITLE_STYLE
 
   return (
-    <aside className="w-72 flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col overflow-hidden">
+    <aside className="w-full lg:w-72 flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col overflow-hidden max-h-[70vh] lg:max-h-none">
       <div className="p-3 border-b border-border flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <Mic className="h-3.5 w-3.5 text-primary" />

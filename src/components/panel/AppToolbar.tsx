@@ -59,16 +59,16 @@ export function AppToolbar({
     'VideoFrame' in window
 
   return (
-    <header className="flex items-center gap-1 px-3 h-12 border-b border-border bg-card flex-shrink-0">
+    <header className="flex items-center gap-1 px-2 sm:px-3 h-12 border-b border-border bg-card flex-shrink-0 overflow-x-auto overflow-y-hidden">
       {/* Branding + 專案名稱（無框、hover 才浮現底色） */}
-      <div className="flex-shrink-0 flex items-center gap-2.5 select-none">
+      <div className="flex-shrink-0 flex items-center gap-1.5 sm:gap-2.5 select-none">
         <span className="h-7 w-7 rounded-xl bg-gradient-to-br from-primary to-primary/60 text-primary-foreground flex items-center justify-center shadow-sm">
           <Film className="h-3.5 w-3.5" />
         </span>
         <Input
           value={projectName}
           onChange={e => onProjectNameChange(normalizeProjectName(e.target.value))}
-          className="h-8 w-40 text-[13px] font-semibold border-transparent bg-transparent shadow-none hover:bg-muted/70 focus-visible:bg-muted/70 focus-visible:ring-1 transition-colors rounded-lg px-2"
+          className="h-8 w-20 sm:w-40 text-[13px] font-semibold border-transparent bg-transparent shadow-none hover:bg-muted/70 focus-visible:bg-muted/70 focus-visible:ring-1 transition-colors rounded-lg px-2"
           placeholder="未命名專案"
           title="專案名稱"
         />

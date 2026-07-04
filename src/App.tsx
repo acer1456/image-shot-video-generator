@@ -57,8 +57,8 @@ function AppInner() {
   const [overlaysLocked, setOverlaysLocked] = useState(false)
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
-  const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
-  const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(false)
+  const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
+  const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
@@ -584,8 +584,8 @@ function AppInner() {
         onRequestFullscreen={requestFullscreen}
       />
 
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-2 gap-2">
-        <div className="flex flex-1 min-h-0 overflow-hidden gap-2">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto lg:overflow-hidden p-2 gap-2">
+        <div className="flex flex-col lg:flex-row flex-1 lg:min-h-0 gap-2">
           <NarrationSidebar
             track={narrationTrack}
             onTrackChange={handleNarrationTrackChange}
