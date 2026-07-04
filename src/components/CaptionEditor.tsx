@@ -270,6 +270,63 @@ export default function CaptionEditor({ point, disabled, activeCaptionIndex, onS
 
           <Separator />
 
+          {/* ── 文字顏色 ────────────────────────────────────────── */}
+          <p className="text-xs font-semibold">文字顏色</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="mb-1 block">主字幕顏色</Label>
+              <input
+                type="color"
+                value={cap?.textColor || '#ffffff'}
+                onChange={e => onUpdateCaption('textColor', e.target.value)}
+                className="w-full h-9 rounded-lg border border-input cursor-pointer"
+                disabled={disabled}
+              />
+            </div>
+            <div>
+              <Label className="mb-1 block">副字幕顏色</Label>
+              <input
+                type="color"
+                value={cap?.subTextColor || '#ffffff'}
+                onChange={e => onUpdateCaption('subTextColor', e.target.value)}
+                className="w-full h-9 rounded-lg border border-input cursor-pointer"
+                disabled={disabled}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* ── 文字描邊 ────────────────────────────────────────── */}
+          <p className="text-xs font-semibold">文字描邊</p>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={cap?.strokeEnabled === true}
+              onChange={e => onUpdateCaption('strokeEnabled', e.target.checked)}
+              disabled={disabled}
+              className="rounded"
+            />
+            <span className="text-xs">啟用描邊</span>
+          </label>
+          {cap?.strokeEnabled && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-1 block">描邊顏色</Label>
+                <input
+                  type="color"
+                  value={cap?.strokeColor || '#000000'}
+                  onChange={e => onUpdateCaption('strokeColor', e.target.value)}
+                  className="w-full h-9 rounded-lg border border-input cursor-pointer"
+                  disabled={disabled}
+                />
+              </div>
+              <RangeNumber label="描邊粗細 (px)" value={cap?.strokeWidth ?? 4} min={1} max={16} step={1} field="strokeWidth" />
+            </div>
+          )}
+
+          <Separator />
+
           {/* ── 主字幕文字陰影 ──────────────────────────────────── */}
           <p className="text-xs font-semibold">主字幕文字陰影</p>
           <div className="grid grid-cols-2 gap-3">

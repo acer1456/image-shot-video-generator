@@ -384,6 +384,22 @@ export function drawCaption(
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
+  // 描邊設定（strokeWidth 以 1080 輸出寬為基準換算）
+  const strokeEnabled = cap.strokeEnabled === true
+  if (strokeEnabled) {
+    ctx.strokeStyle = cap.strokeColor || '#000000'
+    ctx.lineWidth = Math.max(0.5, (cap.strokeWidth ?? 4) / OUTPUT_W * canvas.width)
+    ctx.lineJoin = 'round'
+  }
+  const fillLine = (line: string, x: number, y: number) => {
+    if (strokeEnabled) {
+      const sc = ctx.shadowColor
+      ctx.shadowColor = 'transparent'
+      ctx.strokeText(line, x, y)
+      ctx.shadowColor = sc
+    }
+    ctx.fillText(line, x, y)
+  }
   if (hasText) {
     // ── Shadow box (hideable) ─────────────────────────────────────────
     if (cap.shadowBoxVisible !== false) {
@@ -395,7 +411,7 @@ export function drawCaption(
     // ── Main caption ──────────────────────────────────────────────────
     if (layout.mainLines.length) {
       ctx.font = `800 ${layout.mainSize}px ${layout.fontFamily}`
-      ctx.fillStyle = 'white'
+      ctx.fillStyle = cap.textColor || '#ffffff'
       const mainDist = cap.textShadowDistance ?? 0
       if (mainDist > 0) {
         const rad = ((cap.textShadowAngle ?? 120) * Math.PI) / 180
@@ -406,7 +422,7 @@ export function drawCaption(
       }
       layout.mainLines.forEach(line => {
         const lineY = y + layout.mainLine / 2
-        ctx.fillText(line, layout.cx, lineY)
+        fillLine(line, layout.cx, lineY)
         y += layout.mainLine
       })
       if (mainDist > 0) {
@@ -418,7 +434,7 @@ export function drawCaption(
     // ── Subtitle ──────────────────────────────────────────────────────
     if (layout.subLines.length) {
       ctx.font = `650 ${layout.subSize}px ${layout.subtitleFontFamily}`
-      ctx.fillStyle = 'rgba(255,255,255,.92)'
+      ctx.fillStyle = hexToRgba(cap.subTextColor || '#ffffff', 0.92)
       const subDist = cap.subTextShadowDistance ?? 0
       if (subDist > 0) {
         const rad = ((cap.subTextShadowAngle ?? 120) * Math.PI) / 180
@@ -429,7 +445,7 @@ export function drawCaption(
       }
       layout.subLines.forEach(line => {
         const lineY = y + layout.subLine / 2
-        ctx.fillText(line, layout.cx, lineY)
+        fillLine(line, layout.cx, lineY)
         y += layout.subLine
       })
       if (subDist > 0) {

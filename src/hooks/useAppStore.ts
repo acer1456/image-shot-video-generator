@@ -8,6 +8,7 @@ import { DEFAULT_FONT, clamp, normalizeProjectName } from '@/lib/utils'
 const CAPTION_STYLE_KEYS: (keyof CaptionData)[] = [
   'x', 'y', 'scale', 'subtitleScale', 'fontFamily', 'subtitleFontFamily',
   'boxScaleX', 'boxScaleY', 'shadowColor', 'shadowAlpha', 'shadowBoxVisible',
+  'textColor', 'subTextColor', 'strokeEnabled', 'strokeColor', 'strokeWidth',
   'textShadowColor', 'textShadowAlpha', 'textShadowAngle', 'textShadowDistance',
   'subTextShadowColor', 'subTextShadowAlpha', 'subTextShadowAngle', 'subTextShadowDistance',
 ]
@@ -21,6 +22,8 @@ function makeCaption(
     fontFamily: 'Georgia', subtitleFontFamily: 'Georgia',
     boxScaleX: 1, boxScaleY: 1, shadowColor: '#000000', shadowAlpha: 0.48,
     shadowBoxVisible: false,
+    textColor: '#ffffff', subTextColor: '#ffffff',
+    strokeEnabled: false, strokeColor: '#000000', strokeWidth: 4,
     textShadowColor: '#000000', textShadowAlpha: 0.7, textShadowAngle: 50, textShadowDistance: 5,
     subTextShadowColor: '#000000', subTextShadowAlpha: 0.7, subTextShadowAngle: 50, subTextShadowDistance: 5,
   }

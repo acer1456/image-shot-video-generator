@@ -9,6 +9,12 @@ export interface CaptionData {
   subtitleFontFamily: string
   boxScaleX: number
   boxScaleY: number
+  // ── Text colour / stroke（與旁白字幕卡片同等的樣式參數）──
+  textColor: string
+  subTextColor: string
+  strokeEnabled: boolean
+  strokeColor: string
+  strokeWidth: number   // px，以 1080 輸出寬為基準
   // ── Shadow box ─────────────────────
   shadowColor: string
   shadowAlpha: number
