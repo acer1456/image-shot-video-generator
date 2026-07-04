@@ -408,51 +408,37 @@ export function drawCaption(
       ctx.fill()
     }
     let y = layout.cy - layout.textH / 2
+    // ── 文字陰影：與旁白字幕卡片相同的模型（開關＋模糊＋透明度，固定 offset 2,2、黑色）──
+    const shadowEnabled = cap.textShadowEnabled ?? true
+    ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${cap.textShadowOpacity ?? 0.7})` : 'transparent'
+    ctx.shadowBlur = shadowEnabled ? (cap.textShadowBlur ?? 10) : 0
+    ctx.shadowOffsetX = shadowEnabled ? 2 : 0
+    ctx.shadowOffsetY = shadowEnabled ? 2 : 0
     // ── Main caption ──────────────────────────────────────────────────
     if (layout.mainLines.length) {
       ctx.font = `800 ${layout.mainSize}px ${layout.fontFamily}`
       ctx.fillStyle = cap.textColor || '#ffffff'
-      const mainDist = cap.textShadowDistance ?? 0
-      if (mainDist > 0) {
-        const rad = ((cap.textShadowAngle ?? 120) * Math.PI) / 180
-        ctx.shadowOffsetX = mainDist * Math.cos(rad)
-        ctx.shadowOffsetY = mainDist * Math.sin(rad)
-        ctx.shadowColor = hexToRgba(cap.textShadowColor || '#000000', cap.textShadowAlpha ?? 0.7)
-        ctx.shadowBlur = Math.max(2, mainDist * 0.3)
-      }
       layout.mainLines.forEach(line => {
         const lineY = y + layout.mainLine / 2
         fillLine(line, layout.cx, lineY)
         y += layout.mainLine
       })
-      if (mainDist > 0) {
-        ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0
-      }
     }
     if (layout.mainLines.length && layout.subLines.length) y += layout.gap
     // ── Subtitle ──────────────────────────────────────────────────────
     if (layout.subLines.length) {
       ctx.font = `650 ${layout.subSize}px ${layout.subtitleFontFamily}`
       ctx.fillStyle = hexToRgba(cap.subTextColor || '#ffffff', 0.92)
-      const subDist = cap.subTextShadowDistance ?? 0
-      if (subDist > 0) {
-        const rad = ((cap.subTextShadowAngle ?? 120) * Math.PI) / 180
-        ctx.shadowOffsetX = subDist * Math.cos(rad)
-        ctx.shadowOffsetY = subDist * Math.sin(rad)
-        ctx.shadowColor = hexToRgba(cap.subTextShadowColor || '#000000', cap.subTextShadowAlpha ?? 0.7)
-        ctx.shadowBlur = Math.max(2, subDist * 0.3)
-      }
       layout.subLines.forEach(line => {
         const lineY = y + layout.subLine / 2
         fillLine(line, layout.cx, lineY)
         y += layout.subLine
       })
-      if (subDist > 0) {
-        ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0
-      }
     }
+    ctx.shadowColor = 'transparent'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
   }
   if (includeGuides) {
     drawSnapGuides(canvas, ctx, snapGuide)

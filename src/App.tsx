@@ -381,7 +381,6 @@ function AppInner() {
     const scale = clamp(style.fontSizeRatio * OUTPUT_W / 56, 0.3, 3)
     // 副字 = 34px × scale × subtitleScale，要等於主字 × translationScale
     const subtitleScale = clamp(style.translationScale * 56 / 34, 0.3, 3)
-    const shadowOn = style.shadowEnabled
     const patch: Partial<CaptionData> = {
       fontFamily: style.fontFamily,
       subtitleFontFamily: style.fontFamily,
@@ -397,14 +396,10 @@ function AppInner() {
       shadowBoxVisible: style.backgroundEnabled,
       shadowColor: '#000000',
       shadowAlpha: style.backgroundOpacity,
-      textShadowColor: '#000000',
-      textShadowAlpha: shadowOn ? style.shadowOpacity : 0,
-      textShadowDistance: shadowOn ? 3 : 0,
-      textShadowAngle: 45,
-      subTextShadowColor: '#000000',
-      subTextShadowAlpha: shadowOn ? style.shadowOpacity : 0,
-      subTextShadowDistance: shadowOn ? 3 : 0,
-      subTextShadowAngle: 45,
+      // 陰影參數模型已與字幕卡片一致，直接一對一對應
+      textShadowEnabled: style.shadowEnabled,
+      textShadowBlur: style.shadowBlur,
+      textShadowOpacity: style.shadowOpacity,
     }
     let next = store.points
     for (const [field, value] of Object.entries(patch)) {

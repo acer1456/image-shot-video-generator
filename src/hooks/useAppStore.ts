@@ -9,8 +9,7 @@ const CAPTION_STYLE_KEYS: (keyof CaptionData)[] = [
   'x', 'y', 'scale', 'subtitleScale', 'fontFamily', 'subtitleFontFamily',
   'boxScaleX', 'boxScaleY', 'shadowColor', 'shadowAlpha', 'shadowBoxVisible',
   'textColor', 'subTextColor', 'strokeEnabled', 'strokeColor', 'strokeWidth',
-  'textShadowColor', 'textShadowAlpha', 'textShadowAngle', 'textShadowDistance',
-  'subTextShadowColor', 'subTextShadowAlpha', 'subTextShadowAngle', 'subTextShadowDistance',
+  'textShadowEnabled', 'textShadowBlur', 'textShadowOpacity',
 ]
 
 function makeCaption(
@@ -24,8 +23,7 @@ function makeCaption(
     shadowBoxVisible: false,
     textColor: '#ffffff', subTextColor: '#ffffff',
     strokeEnabled: false, strokeColor: '#000000', strokeWidth: 4,
-    textShadowColor: '#000000', textShadowAlpha: 0.7, textShadowAngle: 50, textShadowDistance: 5,
-    subTextShadowColor: '#000000', subTextShadowAlpha: 0.7, subTextShadowAngle: 50, subTextShadowDistance: 5,
+    textShadowEnabled: true, textShadowBlur: 10, textShadowOpacity: 0.7,
   }
   return { ...base, ...(lastCaptionStyle || {}), text: '', subtitle: '', ...overrides }
 }
@@ -48,6 +46,19 @@ function makePoint(
   }
 }
 
+// 舊版鏡頭字幕陰影（distance/angle/alpha）→ 新版（enabled/blur/opacity）遷移
+function migrateLegacyCaptionShadow(caption: Partial<CaptionData> | undefined): Partial<CaptionData> | undefined {
+  if (!caption) return caption
+  const legacy = caption as Partial<CaptionData> & { textShadowDistance?: number; textShadowAlpha?: number }
+  if (legacy.textShadowEnabled != null || legacy.textShadowDistance == null) return caption
+  return {
+    ...caption,
+    textShadowEnabled: (Number(legacy.textShadowDistance) || 0) > 0,
+    textShadowBlur: clamp(Math.round((Number(legacy.textShadowDistance) || 0) * 0.6) + 2, 0, 24),
+    textShadowOpacity: clamp(Number(legacy.textShadowAlpha ?? 0.7), 0, 1),
+  }
+}
+
 export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<CaptionData> }): CameraPoint {
   return {
     x: clamp(Number(raw?.x ?? 0.5), 0, 1),
@@ -56,8 +67,8 @@ export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<C
     move: raw?.move === 'jump' ? 'jump' : 'slide',
     moveDuration: clamp(Number(raw?.moveDuration ?? 2), 0.1, 20),
     holdDuration: clamp(Number(raw?.holdDuration ?? 0.8), 0, 20),
-    caption: makeCaption(null, raw?.caption || {}),
-    extraCaptions: (raw?.extraCaptions || []).map(c => makeCaption(null, c))
+    caption: makeCaption(null, migrateLegacyCaptionShadow(raw?.caption) || {}),
+    extraCaptions: (raw?.extraCaptions || []).map(c => makeCaption(null, migrateLegacyCaptionShadow(c) || {}))
   }
 }
 

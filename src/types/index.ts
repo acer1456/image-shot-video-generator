@@ -19,16 +19,10 @@ export interface CaptionData {
   shadowColor: string
   shadowAlpha: number
   shadowBoxVisible: boolean
-  // ── Main text shadow ───────────────
-  textShadowColor: string
-  textShadowAlpha: number
-  textShadowAngle: number
-  textShadowDistance: number
-  // ── Subtitle text shadow ───────────
-  subTextShadowColor: string
-  subTextShadowAlpha: number
-  subTextShadowAngle: number
-  subTextShadowDistance: number
+  // ── Text shadow（與旁白字幕卡片相同的參數模型：開關＋模糊＋透明度，主副共用）──
+  textShadowEnabled: boolean
+  textShadowBlur: number     // 0–24 px
+  textShadowOpacity: number  // 0–1
 }
 
 export interface CameraPoint {
