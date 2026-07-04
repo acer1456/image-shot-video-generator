@@ -655,6 +655,92 @@ export function NarrationSidebar({
                 />
               </div>
 
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground">中文字幕大小</label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.translationScale * 100)}%</span>
+                </div>
+                <Slider
+                  min={50} max={100} step={2}
+                  value={Math.round(cueStyle.translationScale * 100)}
+                  onChange={v => updateActiveCueStyle({ translationScale: v / 100 })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">文字顏色</label>
+                <input
+                  type="color"
+                  value={cueStyle.color}
+                  onChange={e => updateActiveCueStyle({ color: e.target.value })}
+                  className="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">描邊</label>
+                <div className="flex items-center gap-2">
+                  {cueStyle.strokeEnabled && (
+                    <input
+                      type="color"
+                      value={cueStyle.strokeColor}
+                      onChange={e => updateActiveCueStyle({ strokeColor: e.target.value })}
+                      className="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
+                    />
+                  )}
+                  <button
+                    className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                      cueStyle.strokeEnabled
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-border'
+                    }`}
+                    onClick={() => updateActiveCueStyle({ strokeEnabled: !cueStyle.strokeEnabled })}
+                  >
+                    {cueStyle.strokeEnabled ? '開' : '關'}
+                  </button>
+                </div>
+              </div>
+              {cueStyle.strokeEnabled && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-muted-foreground">描邊粗細</label>
+                    <span className="text-[10px] text-muted-foreground">{cueStyle.strokeWidth}px</span>
+                  </div>
+                  <Slider
+                    min={1} max={12} step={1}
+                    value={cueStyle.strokeWidth}
+                    onChange={v => updateActiveCueStyle({ strokeWidth: v })}
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">背景條</label>
+                <button
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                    cueStyle.backgroundEnabled
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted text-muted-foreground border-border'
+                  }`}
+                  onClick={() => updateActiveCueStyle({ backgroundEnabled: !cueStyle.backgroundEnabled })}
+                >
+                  {cueStyle.backgroundEnabled ? '開' : '關'}
+                </button>
+              </div>
+              {cueStyle.backgroundEnabled && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-muted-foreground">背景不透明度</label>
+                    <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.backgroundOpacity * 100)}%</span>
+                  </div>
+                  <Slider
+                    min={10} max={90} step={5}
+                    value={Math.round(cueStyle.backgroundOpacity * 100)}
+                    onChange={v => updateActiveCueStyle({ backgroundOpacity: v / 100 })}
+                  />
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
                 <label className="text-xs text-muted-foreground">陰影</label>
                 <button

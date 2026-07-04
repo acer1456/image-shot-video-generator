@@ -150,6 +150,13 @@ export interface SubtitleStyle {
   shadowBlur: number      // 0–24 px
   shadowOpacity: number   // 0–1
   subtitlePosition: { x: number; y: number }  // normalized 0–1
+  color: string           // 主字幕文字顏色
+  translationScale: number // 副（翻譯）字幕相對主字幕的大小，0.5–1
+  strokeEnabled: boolean  // 文字描邊
+  strokeColor: string
+  strokeWidth: number     // px（以 1080 寬為基準）
+  backgroundEnabled: boolean  // 半透明背景條
+  backgroundOpacity: number   // 0–1
 }
 
 export interface SubtitleCue {
@@ -172,4 +179,11 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   shadowBlur: 10,
   shadowOpacity: 0.9,
   subtitlePosition: { x: 0.5, y: 0.87 },
+  color: '#ffffff',
+  translationScale: 0.72,
+  strokeEnabled: false,
+  strokeColor: '#000000',
+  strokeWidth: 4,
+  backgroundEnabled: false,
+  backgroundOpacity: 0.45,
 }

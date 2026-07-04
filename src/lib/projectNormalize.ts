@@ -16,6 +16,13 @@ export function normalizeSubtitleStyle(value: unknown): SubtitleStyle {
     subtitlePosition: s.subtitlePosition && typeof (s.subtitlePosition as Record<string, unknown>).x === 'number'
       ? s.subtitlePosition as { x: number; y: number }
       : DEFAULT_SUBTITLE_STYLE.subtitlePosition,
+    color: typeof s.color === 'string' ? s.color : DEFAULT_SUBTITLE_STYLE.color,
+    translationScale: typeof s.translationScale === 'number' ? s.translationScale : DEFAULT_SUBTITLE_STYLE.translationScale,
+    strokeEnabled: typeof s.strokeEnabled === 'boolean' ? s.strokeEnabled : DEFAULT_SUBTITLE_STYLE.strokeEnabled,
+    strokeColor: typeof s.strokeColor === 'string' ? s.strokeColor : DEFAULT_SUBTITLE_STYLE.strokeColor,
+    strokeWidth: typeof s.strokeWidth === 'number' ? s.strokeWidth : DEFAULT_SUBTITLE_STYLE.strokeWidth,
+    backgroundEnabled: typeof s.backgroundEnabled === 'boolean' ? s.backgroundEnabled : DEFAULT_SUBTITLE_STYLE.backgroundEnabled,
+    backgroundOpacity: typeof s.backgroundOpacity === 'number' ? s.backgroundOpacity : DEFAULT_SUBTITLE_STYLE.backgroundOpacity,
   }
 }
 

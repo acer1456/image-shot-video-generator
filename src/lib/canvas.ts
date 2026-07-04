@@ -289,7 +289,7 @@ export function drawNarrationSubtitle(
   const [mainText = '', subText = ''] = text.split('\n')
   ctx.font = `700 ${fontSize}px ${fontFamily}`
   const mainLines = mainText.trim() ? [mainText.trim()] : []
-  const subFontSize = Math.round(fontSize * 0.72)
+  const subFontSize = Math.round(fontSize * (style?.translationScale ?? 0.72))
   ctx.font = `650 ${subFontSize}px ${fontFamily}`
   const trimmedSubText = subText.trim()
   const subLines = trimmedSubText
@@ -308,22 +308,56 @@ export function drawNarrationSubtitle(
   const shadowEnabled = style?.shadowEnabled ?? true
   const shadowBlur = style?.shadowBlur ?? 10
   const shadowOpacity = style?.shadowOpacity ?? 0.9
+
+  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+
+  // ── 半透明背景條 ────────────────────────────────────────────────
+  if ((style?.backgroundEnabled ?? false) && totalHeight > 0) {
+    ctx.font = `700 ${fontSize}px ${fontFamily}`
+    let maxWidth = mainLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), 0)
+    ctx.font = `650 ${subFontSize}px ${fontFamily}`
+    maxWidth = subLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), maxWidth)
+    const padX = Math.round(fontSize * 0.5)
+    const padY = Math.round(fontSize * 0.3)
+    const boxW = Math.min(canvas.width * 0.96, maxWidth + padX * 2)
+    const boxH = totalHeight + padY * 2
+    ctx.fillStyle = `rgba(0,0,0,${style?.backgroundOpacity ?? 0.45})`
+    roundRect(ctx, cx - boxW / 2, centerY - boxH / 2, boxW, boxH, Math.round(fontSize * 0.25))
+    ctx.fill()
+  }
+
   ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${shadowOpacity})` : 'transparent'
   ctx.shadowBlur = shadowEnabled ? shadowBlur : 0
   ctx.shadowOffsetX = shadowEnabled ? 2 : 0
   ctx.shadowOffsetY = shadowEnabled ? 2 : 0
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = style?.color ?? '#ffffff'
 
-  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+  const strokeEnabled = style?.strokeEnabled ?? false
+  if (strokeEnabled) {
+    ctx.strokeStyle = style?.strokeColor ?? '#000000'
+    ctx.lineWidth = Math.max(1, (style?.strokeWidth ?? 4) / 1080 * canvas.width)
+    ctx.lineJoin = 'round'
+  }
+  const drawLine = (line: string, x: number, y: number) => {
+    if (strokeEnabled) {
+      // 描邊不帶陰影，避免疊出雙重黑邊
+      const sc = ctx.shadowColor
+      ctx.shadowColor = 'transparent'
+      ctx.strokeText(line, x, y)
+      ctx.shadowColor = sc
+    }
+    ctx.fillText(line, x, y)
+  }
+
   let y = centerY - totalHeight / 2 + lineHeight / 2
   ctx.font = `700 ${fontSize}px ${fontFamily}`
   for (const line of mainLines) {
-    ctx.fillText(line, cx, y)
+    drawLine(line, cx, y)
     y += lineHeight
   }
   ctx.font = `650 ${subFontSize}px ${fontFamily}`
   for (const line of subLines) {
-    ctx.fillText(line, cx, y - (lineHeight - subLineHeight) / 2)
+    drawLine(line, cx, y - (lineHeight - subLineHeight) / 2)
     y += subLineHeight
   }
 
