@@ -105,23 +105,55 @@
 }
 .timeline-editor-action {
   background-color: transparent !important;
+  transition: box-shadow 120ms ease, filter 120ms ease;
 }
+/* hover / 拖曳中：明顯的外框與亮度回饋 */
+.timeline-editor-action:hover {
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,.55);
+  filter: brightness(1.08);
+  z-index: 5;
+}
+/* ── 左右伸縮把手：更寬的熱區 + 永遠可見的把手條 ── */
 .timeline-editor-action .timeline-editor-action-left-stretch,
 .timeline-editor-action .timeline-editor-action-right-stretch {
-  width: 18px !important;
-  z-index: 4;
+  width: 26px !important;
+  z-index: 6;
+  cursor: ew-resize !important;
 }
 .timeline-editor-action .timeline-editor-action-left-stretch {
-  left: -4px !important;
+  left: -8px !important;
 }
 .timeline-editor-action .timeline-editor-action-right-stretch {
-  right: -4px !important;
+  right: -8px !important;
 }
-.timeline-editor-action .timeline-editor-action-left-stretch:hover:after {
-  border-left-color: rgba(255,255,255,.45) !important;
+/* 覆蓋套件預設的三角形箭頭，改成圓角把手條 */
+.timeline-editor-action .timeline-editor-action-left-stretch:after,
+.timeline-editor-action .timeline-editor-action-right-stretch:after {
+  content: '' !important;
+  position: absolute !important;
+  top: 22% !important;
+  height: 56% !important;
+  width: 4px !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,.28);
+  transition: background 120ms ease, transform 120ms ease;
 }
+.timeline-editor-action .timeline-editor-action-left-stretch:after {
+  left: 11px !important;
+}
+.timeline-editor-action .timeline-editor-action-right-stretch:after {
+  right: 11px !important;
+  left: auto !important;
+}
+.timeline-editor-action:hover .timeline-editor-action-left-stretch:after,
+.timeline-editor-action:hover .timeline-editor-action-right-stretch:after {
+  background: rgba(255,255,255,.75);
+}
+.timeline-editor-action .timeline-editor-action-left-stretch:hover:after,
 .timeline-editor-action .timeline-editor-action-right-stretch:hover:after {
-  border-right-color: rgba(255,255,255,.45) !important;
+  background: #ffffff !important;
+  transform: scaleY(1.15);
 }
 .timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb {
   background: hsl(var(--border)) !important;

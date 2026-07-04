@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { createAiTimeoutSignal, fetchOpenRouterModels, isAbortError, parseAiJsonObject, type OpenRouterModelInfo } from '@/lib/openrouter'
+import { CAMERA_TEMPLATES } from '@/lib/cameraTemplates'
 import type { SubtitleCue } from '@/types'
 
 const LS_KEY_KEY = 'openrouter_api_key'
@@ -255,7 +256,11 @@ Year: ${info.year || '(unknown)'}
 Current location: ${info.location || '(unknown)'}`
 }
 
-function buildCameraInstruction(subtitleCues: SubtitleCue[]) {
+function buildCameraInstruction(subtitleCues: SubtitleCue[], templateId?: string) {
+  const template = CAMERA_TEMPLATES.find(t => t.id === templateId)
+  const templateSection = template
+    ? `\n\nCamera style template (follow this pacing and structure; it overrides the generic grouping rules above):\n${template.aiStyleHint}`
+    : ''
   return `You are a cinematic camera planner for a 9:16 art analysis video.
 
 The voiceover audio and subtitle timeline already exist. Do not change any text or timing.
@@ -294,7 +299,7 @@ Rules:
 - When changing camera position or zoom, moveDuration should be 1.5-2.0 seconds when the cue span allows it.
 - Leave at least 1-2 seconds of hold time after a move when possible. For very short cues, choose the closest slower move that still leaves visible hold time.
 - Choose camera positions that visually match the cue's story meaning.
-- captionX/captionY controls the narration subtitle position. Default 0.5/0.87, move it only if it covers important visual details.
+- captionX/captionY controls the narration subtitle position. Default 0.5/0.87, move it only if it covers important visual details.${templateSection}
 
 Subtitle timeline:
 ${JSON.stringify(subtitleCues.map(cue => ({
@@ -485,6 +490,7 @@ export function NarrationAIPanel({
   const [location, setLocation] = useState('')
   const [minSeconds, setMinSeconds] = useState('40')
   const [maxSeconds, setMaxSeconds] = useState('60')
+  const [cameraTemplateId, setCameraTemplateId] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
@@ -530,7 +536,7 @@ export function NarrationAIPanel({
               apiKey,
               model,
               image,
-              prompt: `${buildCameraInstruction(subtitleCues)}${lastError ? `\n\nPrevious output failed validation: ${lastError}\nReturn the complete structured JSON again and correct the camera pacing according to that validation error.` : ''}`,
+              prompt: `${buildCameraInstruction(subtitleCues, cameraTemplateId)}${lastError ? `\n\nPrevious output failed validation: ${lastError}\nReturn the complete structured JSON again and correct the camera pacing according to that validation error.` : ''}`,
               schema: buildCameraSchema(subtitleCues),
               schemaName: 'narration_camera_beats',
               maxTokens: 8000,
@@ -538,7 +544,8 @@ export function NarrationAIPanel({
             validateCameraCoverage(parsed as CameraBeatResponse, subtitleCues)
             const nextResult = normalizeCameraResult(parsed as CameraBeatResponse, subtitleCues, narrationDuration)
             if (!nextResult.points.length) throw new Error('AI 回傳資料不完整，缺少鏡頭')
-            validateCameraMotion(nextResult)
+            // 選了模板時節奏由模板定義，不用通用的鏡頭變化頻率驗證
+            if (!cameraTemplateId) validateCameraMotion(nextResult)
             result = nextResult
             break
           } catch (error) {
@@ -570,7 +577,7 @@ export function NarrationAIPanel({
       setErrorMsg(error instanceof Error ? error.message : '未知錯誤')
       setStatus('error')
     }
-  }, [apiKey, artist, handleClose, image, location, maxSeconds, minSeconds, mode, model, narrationDuration, onApplyCamera, onApplyStory, subtitleCues, title, year])
+  }, [apiKey, artist, cameraTemplateId, handleClose, image, location, maxSeconds, minSeconds, mode, model, narrationDuration, onApplyCamera, onApplyStory, subtitleCues, title, year])
 
   const isCameraMode = mode === 'camera'
 
@@ -640,6 +647,27 @@ export function NarrationAIPanel({
                 <Label>Current location</Label>
                 <Input value={location} onChange={event => setLocation(event.target.value)} />
               </div>
+            </div>
+          )}
+
+          {isCameraMode && (
+            <div className="grid gap-2">
+              <Label>運鏡模板</Label>
+              <select
+                className="text-sm rounded-lg border border-input bg-background px-3 h-9 outline-none focus:ring-1 focus:ring-ring"
+                value={cameraTemplateId}
+                onChange={event => setCameraTemplateId(event.target.value)}
+              >
+                <option value="">自動（依旁白節奏配置）</option>
+                {CAMERA_TEMPLATES.map(t => (
+                  <option key={t.id} value={t.id} title={t.description}>{t.label}</option>
+                ))}
+              </select>
+              {cameraTemplateId && (
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {CAMERA_TEMPLATES.find(t => t.id === cameraTemplateId)?.description}
+                </p>
+              )}
             </div>
           )}
 

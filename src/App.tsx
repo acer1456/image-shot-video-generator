@@ -16,9 +16,9 @@ import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
+import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
-import { normalizeProjectName, nextFrame } from '@/lib/utils'
+import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
   getTimelineStateAt, buildTimeline,
@@ -371,6 +371,44 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
+  // 把旁白字幕卡片的 SubtitleStyle 對應轉成鏡頭字幕（CaptionData）欄位，套用到目前選取的鏡頭
+  const handleApplySubtitleStyleToCameraCaption = useCallback((style: SubtitleStyle) => {
+    if (store.activeIndex < 0 || !store.points[store.activeIndex]) {
+      alert('請先在時間軸或鏡頭列表選擇一個鏡頭')
+      return
+    }
+    // 鏡頭字幕主字 = 56px × scale（以 1080 輸出寬為基準）；字幕卡片主字 = fontSizeRatio × 1080
+    const scale = clamp(style.fontSizeRatio * OUTPUT_W / 56, 0.3, 3)
+    // 副字 = 34px × scale × subtitleScale，要等於主字 × translationScale
+    const subtitleScale = clamp(style.translationScale * 56 / 34, 0.3, 3)
+    const shadowOn = style.shadowEnabled
+    const patch: Partial<CaptionData> = {
+      fontFamily: style.fontFamily,
+      subtitleFontFamily: style.fontFamily,
+      scale,
+      subtitleScale,
+      x: style.subtitlePosition.x,
+      y: style.subtitlePosition.y,
+      shadowBoxVisible: style.backgroundEnabled,
+      shadowColor: '#000000',
+      shadowAlpha: style.backgroundOpacity,
+      textShadowColor: '#000000',
+      textShadowAlpha: shadowOn ? style.shadowOpacity : 0,
+      textShadowDistance: shadowOn ? 3 : 0,
+      textShadowAngle: 45,
+      subTextShadowColor: '#000000',
+      subTextShadowAlpha: shadowOn ? style.shadowOpacity : 0,
+      subTextShadowDistance: shadowOn ? 3 : 0,
+      subTextShadowAngle: 45,
+    }
+    let next = store.points
+    for (const [field, value] of Object.entries(patch)) {
+      next = store.updateCaptionField(store.activeIndex, field as keyof CaptionData, value as never, next)
+    }
+    store.rememberCaptionStyle(store.activeIndex, next)
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
   const handleNarrationAiStoryApply = useCallback((result: NarrationAIStoryResult) => {
     setNarrationInputText(result.narrationInputText)
   }, [])
@@ -560,6 +598,7 @@ function AppInner() {
             image={store.image}
             onApplyAiStory={handleNarrationAiStoryApply}
             onApplyAiCamera={handleNarrationAiCameraApply}
+            onApplyStyleToCameraCaption={handleApplySubtitleStyleToCameraCaption}
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />

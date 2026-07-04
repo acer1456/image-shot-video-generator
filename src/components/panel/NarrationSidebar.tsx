@@ -39,6 +39,7 @@ export interface NarrationSidebarProps {
   image: HTMLImageElement | null
   onApplyAiStory: (result: NarrationAIStoryResult) => void
   onApplyAiCamera: (result: NarrationAICameraResult) => void
+  onApplyStyleToCameraCaption?: (style: SubtitleStyle) => void
   collapsed: boolean
   onToggleCollapse: () => void
 }
@@ -109,7 +110,7 @@ export function NarrationSidebar({
   subtitleCues, onSubtitleCuesChange,
   activeSubtitleId, onActiveSubtitleIdChange,
   inputText, onInputTextChange,
-  image, onApplyAiStory, onApplyAiCamera,
+  image, onApplyAiStory, onApplyAiCamera, onApplyStyleToCameraCaption,
   collapsed, onToggleCollapse,
 }: NarrationSidebarProps) {
   const { generate, cancel, status, voices } = useheadTTS()
@@ -621,14 +622,27 @@ export function NarrationSidebar({
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold text-muted-foreground">字幕樣式</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 px-2 text-[10px]"
-                  onClick={applyActiveStyleToAll}
-                >
-                  套用全部
-                </Button>
+                <div className="flex items-center gap-1">
+                  {onApplyStyleToCameraCaption && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[10px]"
+                      title="把這組字幕樣式對應套用到目前選取鏡頭的鏡頭字幕"
+                      onClick={() => onApplyStyleToCameraCaption(cueStyle)}
+                    >
+                      套用到鏡頭字幕
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={applyActiveStyleToAll}
+                  >
+                    套用全部
+                  </Button>
+                </div>
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-muted-foreground">字體</label>

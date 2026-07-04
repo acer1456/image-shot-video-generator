@@ -141,6 +141,8 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const [localMusic, setLocalMusic] = useState<TimelineAction[]>([])
   // Incrementing forces editorData useMemo to recompute → camera/narration blocks snap back
   const [snapKey, setSnapKey]       = useState(0)
+  // 拖曳/縮放中的即時時間讀數（顯示在標頭）
+  const [dragReadout, setDragReadout] = useState<string | null>(null)
 
   const revealTime = useCallback((time: number, smooth = true) => {
     const root = rootRef.current
@@ -379,22 +381,38 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     [onTimeChange],
   )
 
+  const formatDragReadout = useCallback((action: TimelineAction, start: number, end: number) => {
+    const rich = action as RichAction
+    const label = rich.data?.label ?? ''
+    setDragReadout(`${label}　${start.toFixed(2)}s → ${end.toFixed(2)}s（${(end - start).toFixed(2)}s）`)
+  }, [])
+
   // Camera row: block left-edge resize. Commit duration at resize end to keep drag smooth.
   const handleResizing = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }): boolean | void => {
-      const { row, dir } = params
+      const { row, dir, action, start, end } = params
       if (row.id === ROW_CAMERA) {
         if (dir === 'left') return false
       }
       if (row.id === ROW_NARRATION) return false
       if (row.id === ROW_OVERLAY && overlaysLocked) return false
+      formatDragReadout(action, start, end)
       return undefined
     },
-    [overlaysLocked],
+    [overlaysLocked, formatDragReadout],
+  )
+
+  const handleMoving = useCallback(
+    (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }): boolean | void => {
+      formatDragReadout(params.action, params.start, params.end)
+      return undefined
+    },
+    [formatDragReadout],
   )
 
   const handleResizeEnd = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }) => {
+      setDragReadout(null)
       const { action, row, start, end } = params
       const rich = action as RichAction
       if (row.id === ROW_CAMERA) {
@@ -430,6 +448,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
   const handleMoveEnd = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }) => {
+      setDragReadout(null)
       const { action, row, start, end } = params
       const rich = action as RichAction
       if (row.id === ROW_NARRATION && narrationTrack && onNarrationTrackChange) {
@@ -611,6 +630,11 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
             ? <><Pause className="h-3 w-3" /><span>暫停</span></>
             : <><Play  className="h-3 w-3" /><span>播放</span></>}
         </button>
+        {dragReadout && (
+          <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-[11px] tabular-nums">
+            {dragReadout}
+          </span>
+        )}
         <span className="ml-auto">{formatTime(currentTime)} / {formatTime(totalDuration)}</span>
         {onToggleExpanded && (
           <button
@@ -720,6 +744,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               onCursorDrag={handleCursorDrag}
               onActionResizing={handleResizing}
               onActionResizeEnd={handleResizeEnd}
+              onActionMoving={handleMoving}
               onActionMoveEnd={handleMoveEnd}
               onRowDragEnd={handleRowDragEnd}
               onClickAction={handleClickAction}
