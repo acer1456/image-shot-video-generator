@@ -55,7 +55,7 @@ export function EditorSidebar({
   if (collapsed) {
     return (
       <div
-        className="flex-shrink-0 rounded-xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
+        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
         style={{ width: 36 }}
         onClick={onToggleCollapse}
         title="展開鏡頭面板"
@@ -74,13 +74,13 @@ export function EditorSidebar({
 
   return (
     <>
-      <aside className="w-96 flex-shrink-0 rounded-xl border border-border bg-card overflow-y-auto">
+      <aside className="w-96 flex-shrink-0 rounded-2xl border border-border bg-card overflow-y-auto">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <Button variant="ghost" size="icon" className="h-7 w-7" title="收合鏡頭面板" onClick={onToggleCollapse}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-          <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-foreground/90">
-            {activeIndex >= 0 ? `鏡頭 ${activeIndex + 1} · Inspector` : '鏡頭 Inspector'}
+          <h2 className="text-[13px] font-semibold">
+            {activeIndex >= 0 ? `鏡頭 ${activeIndex + 1}` : '鏡頭'}
           </h2>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" title="輸出設定" onClick={() => setIsSettingsOpen(true)}>

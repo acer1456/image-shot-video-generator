@@ -332,7 +332,7 @@ export function NarrationSidebar({
   if (collapsed) {
     return (
       <div
-        className="flex-shrink-0 rounded-xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
+        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
         style={{ width: 36 }}
         onClick={onToggleCollapse}
         title="展開旁白面板"
@@ -352,11 +352,11 @@ export function NarrationSidebar({
   const cueStyle = activeCue?.style ?? DEFAULT_SUBTITLE_STYLE
 
   return (
-    <aside className="w-72 flex-shrink-0 rounded-xl border border-border bg-card flex flex-col overflow-hidden">
+    <aside className="w-72 flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col overflow-hidden">
       <div className="p-3 border-b border-border flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <Mic className="h-3.5 w-3.5 text-primary" />
-          <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-foreground/90">旁白 Narration</h2>
+          <h2 className="text-[13px] font-semibold">旁白</h2>
           {track && (
             <span className="text-xs text-muted-foreground bg-muted rounded px-1">
               {formatSecs(getNarrationDuration(track))}

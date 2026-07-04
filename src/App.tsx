@@ -690,7 +690,7 @@ function AppInner() {
           />
         </div>
 
-        <div className="flex-shrink-0 rounded-lg border border-border bg-card p-3">
+        <div className="flex-shrink-0 rounded-2xl border border-border bg-card p-3">
           <TimelinePanel
             ref={timelinePanelRef}
             points={store.points}

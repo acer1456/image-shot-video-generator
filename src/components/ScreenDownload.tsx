@@ -242,10 +242,10 @@ export default function ScreenDownload({
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <Button size="sm" variant="outline" disabled={disabled || !image || !points.length || isDownloading}>
-          {isDownloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-          <span className="hidden sm:inline">下載畫面</span>
-          <ChevronDown className="h-3 w-3 ml-0.5" />
+        <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg text-muted-foreground hover:text-foreground" title="下載目前畫面截圖" disabled={disabled || !image || !points.length || isDownloading}>
+          {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          <span className="hidden lg:inline text-xs">下載畫面</span>
+          <ChevronDown className="h-3 w-3 opacity-70" />
         </Button>
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal>
