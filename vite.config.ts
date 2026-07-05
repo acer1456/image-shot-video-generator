@@ -44,6 +44,56 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@huggingface/transformers', 'kokoro-js']
   },
+  build: {
+    // Large dictionary/model helper chunks are loaded only when the user requests
+    // Chinese conversion or local TTS generation, so they should not warn as part
+    // of the initial app bundle budget.
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/') || id.includes('/node_modules/scheduler/')) {
+            return 'vendor-react'
+          }
+          if (id.includes('/node_modules/@radix-ui/')) {
+            return 'vendor-radix'
+          }
+          if (id.includes('/node_modules/@xzdarcy/')) {
+            return 'vendor-timeline'
+          }
+          if (id.includes('/node_modules/lucide-react/')) {
+            return 'vendor-icons'
+          }
+          if (id.includes('/node_modules/opencc-js/dist/esm/cn2t.js')) {
+            return 'opencc-cn2t'
+          }
+          if (id.includes('/node_modules/opencc-js/dist/esm/t2cn.js')) {
+            return 'opencc-t2cn'
+          }
+          if (id.includes('/node_modules/opencc-js/')) {
+            return 'opencc'
+          }
+          if (id.includes('/node_modules/kokoro-js/')) {
+            return 'tts-kokoro'
+          }
+          if (id.includes('/node_modules/onnxruntime-common/')) {
+            return 'tts-onnx'
+          }
+          if (id.includes('/node_modules/phonemizer/')) {
+            return 'tts-phonemizer'
+          }
+          if (id.includes('/node_modules/@huggingface/transformers/')) {
+            return 'tts-transformers'
+          }
+          if (id.includes('/node_modules/onnxruntime-web/')) {
+            return 'tts-onnx'
+          }
+          return 'vendor'
+        }
+      }
+    }
+  },
   server: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

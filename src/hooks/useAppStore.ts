@@ -49,7 +49,7 @@ export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<C
   return {
     x: clamp(Number(raw?.x ?? 0.5), 0, 1),
     y: clamp(Number(raw?.y ?? 0.5), 0, 1),
-    zoom: clamp(Number(raw?.zoom ?? 1), 1, 8),
+    zoom: clamp(Number(raw?.zoom ?? 1), 1, 15),
     move: raw?.move === 'jump' ? 'jump' : 'slide',
     moveDuration: clamp(Number(raw?.moveDuration ?? 2), 0.1, 20),
     holdDuration: clamp(Number(raw?.holdDuration ?? 0.8), 0, 20),
@@ -77,6 +77,8 @@ export function useAppStore() {
   const [onlyActiveBox, setOnlyActiveBox] = useState(true)
   const [showCaptionBox, setShowCaptionBox] = useState(true)
   const [showGuidesInPreview, setShowGuidesInPreview] = useState(false)
+  const [showNarrationInOutput, setShowNarrationInOutput] = useState(true)
+  const [showCameraCaptionsInOutput, setShowCameraCaptionsInOutput] = useState(true)
   const [lastCaptionStyle, setLastCaptionStyle] = useState<Partial<CaptionData> | null>(null)
   const [lastCameraSettings, setLastCameraSettings] = useState<Partial<CameraPoint> | null>(null)
   const [lastVideoUrl, setLastVideoUrl] = useState<string | null>(null)
@@ -185,6 +187,28 @@ export function useAppStore() {
     return next
   }, [])
 
+  const updateCaptionPosition = useCallback((
+    pointIndex: number,
+    captionIndex: number,
+    x: number,
+    y: number,
+    currentPoints: CameraPoint[],
+  ) => {
+    const next = currentPoints.map((point, index) => {
+      if (index !== pointIndex) return point
+      if (captionIndex === 0) {
+        return { ...point, caption: { ...point.caption, x, y } }
+      }
+      const extraIndex = captionIndex - 1
+      const extraCaptions = [...(point.extraCaptions || [])]
+      if (!extraCaptions[extraIndex]) return point
+      extraCaptions[extraIndex] = { ...extraCaptions[extraIndex], x, y }
+      return { ...point, extraCaptions }
+    })
+    setPoints(next)
+    return next
+  }, [])
+
   const clearPoints = useCallback(() => {
     setPoints([])
     setActiveIndex(-1)
@@ -202,7 +226,7 @@ export function useAppStore() {
     const newPt = makePoint(
       ref ? ref.x : 0.5,
       ref ? ref.y : 0.5,
-      ref ? clamp(ref.zoom, 1, 8) : 3,
+      ref ? clamp(ref.zoom, 1, 15) : 3,
       'slide', 2, 0.8,
       currentCameraSettings, currentLast
     )
@@ -284,6 +308,8 @@ export function useAppStore() {
     onlyActiveBox, setOnlyActiveBox,
     showCaptionBox, setShowCaptionBox,
     showGuidesInPreview, setShowGuidesInPreview,
+    showNarrationInOutput, setShowNarrationInOutput,
+    showCameraCaptionsInOutput, setShowCameraCaptionsInOutput,
     lastCaptionStyle, setLastCaptionStyle,
     lastCameraSettings, setLastCameraSettings,
     lastVideoUrl, setLastVideoUrl,
@@ -298,6 +324,7 @@ export function useAppStore() {
     removePoint,
     updatePointField,
     updateCaptionField,
+    updateCaptionPosition,
     clearPoints,
     insertPointAfter,
     duplicatePoint,

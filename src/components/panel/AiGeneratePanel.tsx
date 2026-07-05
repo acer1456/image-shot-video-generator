@@ -3,15 +3,36 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import {
   fetchOpenRouterModels, generateWithAi, SYSTEM_PROMPT,
-  type AiGenerateResult, type OpenRouterModelInfo,
+  type AiGenerateResult, type OpenRouterModelInfo, type PaintingInfo,
 } from '@/lib/openrouter'
-import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ChevronDown, RefreshCw, FileText } from 'lucide-react'
+import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ChevronDown, RefreshCw, FileText, RotateCcw } from 'lucide-react'
 
 const LS_KEY_KEY        = 'openrouter_api_key'
 const LS_KEY_MODEL      = 'openrouter_model'
 const LS_KEY_MODEL_NAME = 'openrouter_model_name'
+const LS_KEY_CUSTOM_PROMPT = 'openrouter_custom_prompt'
+
+const VISUAL_DESC_OPTS: { value: string; label: string }[] = [
+  { value: '人物肖像為主，面部表情、眼神與手勢細節突出，背景簡潔', label: '人物肖像' },
+  { value: '宗教場景，天使、聖人、神聖光芒，充滿符號與神學象徵', label: '宗教神聖' },
+  { value: '明暗對比強烈，強光從單一方向打入，背景深暗，卡拉瓦喬式戟劇性光影', label: '戟劇光影' },
+  { value: '多人群像構圖，歷史或神話場景，人物動態豐富，空間層次感強', label: '歷史群像' },
+  { value: '室內場景，日常生活細節豐富，物件象徵意涵濃厚', label: '室內日常' },
+  { value: '自然風景為主，天空、光線與大氣效果細腥，人物為輔或缺席', label: '自然風景' },
+  { value: '神話傳說場景，神祘、怪物或傳說人物，充滿寓意與象徵', label: '神話傳說' },
+  { value: '戰爭、衝突或英雄場景，動態張力強，情緒激烈', label: '戰爭衝突' },
+  { value: '__custom__', label: '自訂描述…' },
+]
+
+const THEME_OPTS = [
+  '信仰與神聖', '背叛與謊言', '孤獨與疏離', '犊牲與痛苦',
+  '愛與渴望', '死亡與命運', '榮耀與尊嚴', '母愛與守護',
+  '恐懼與劉傷', '救贎與希望', '權力與控制', '自由與束縛',
+]
 
 interface AiGeneratePanelProps {
   image: HTMLImageElement | null
@@ -194,11 +215,21 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
   const [apiKey, setApiKey]       = useState(() => localStorage.getItem(LS_KEY_KEY)       ?? '')
   const [model, setModel]         = useState(() => localStorage.getItem(LS_KEY_MODEL)     ?? '')
   const [modelName, setModelName] = useState(() => localStorage.getItem(LS_KEY_MODEL_NAME) ?? '')
+  const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem(LS_KEY_CUSTOM_PROMPT) ?? SYSTEM_PROMPT)
   const [showKey, setShowKey]     = useState(false)
   const [status, setStatus]       = useState<Status>('idle')
   const [errorMsg, setErrorMsg]   = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
+  const [unknownPainting, setUnknownPainting] = useState(false)
+  // 畫作資訊
+  const [paintTitle, setPaintTitle]             = useState('')
+  const [paintYear, setPaintYear]               = useState('')
+  const [paintArtist, setPaintArtist]           = useState('')
+  const [paintCollection, setPaintCollection]   = useState('')
+  const [paintVisualSel, setPaintVisualSel]     = useState('')
+  const [paintVisualCustom, setPaintVisualCustom] = useState('')
+  const [paintTheme, setPaintTheme]             = useState('')
 
   useEffect(() => { if (apiKey)    localStorage.setItem(LS_KEY_KEY,        apiKey)    }, [apiKey])
   useEffect(() => { if (model)     localStorage.setItem(LS_KEY_MODEL,      model)     }, [model])
@@ -217,7 +248,22 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
     setErrorMsg('')
     try {
       const dataUrl = imageToDataUrl(image)
-      const result  = await generateWithAi({ apiKey: apiKey.trim(), model }, dataUrl)
+      const info: PaintingInfo = unknownPainting ? {
+        title: '', year: '', artist: '', collection: '', visualDescription: '', theme: '',
+      } : {
+        title: paintTitle,
+        year: paintYear,
+        artist: paintArtist,
+        collection: paintCollection,
+        visualDescription: paintVisualSel === '__custom__' ? paintVisualCustom : paintVisualSel,
+        theme: paintTheme,
+      }
+      const result = await generateWithAi(
+        { apiKey: apiKey.trim(), model },
+        dataUrl,
+        info,
+        customPrompt !== SYSTEM_PROMPT ? customPrompt : undefined,
+      )
       setStatus('success')
       setTimeout(() => { onGenerated(result); handleClose() }, 800)
     } catch (e) {
@@ -257,13 +303,26 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
           {showPrompt && (
             <div className="rounded-xl border border-border bg-muted/40 overflow-hidden">
               <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/60">
-                <span className="text-xs font-medium text-muted-foreground">目前 System Prompt</span>
-                <button onClick={() => setShowPrompt(false)}
-                  className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground">
-                  <X className="h-3 w-3" />
-                </button>
+                <span className="text-xs font-medium text-muted-foreground">Prompt 編輯器（含佔位符）</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => { setCustomPrompt(SYSTEM_PROMPT); localStorage.setItem(LS_KEY_CUSTOM_PROMPT, SYSTEM_PROMPT) }}
+                    title="重置為預設 Prompt"
+                    className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground">
+                    <RotateCcw className="h-3 w-3" />
+                  </button>
+                  <button onClick={() => setShowPrompt(false)}
+                    className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground">
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
-              <pre className="text-[11px] leading-relaxed text-foreground/80 p-3 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono">{SYSTEM_PROMPT}</pre>
+              <textarea
+                value={customPrompt}
+                onChange={e => { setCustomPrompt(e.target.value); localStorage.setItem(LS_KEY_CUSTOM_PROMPT, e.target.value) }}
+                className="w-full text-[11px] leading-relaxed text-foreground/80 p-3 h-56 overflow-y-auto font-mono bg-transparent resize-none border-0 focus:outline-none"
+                spellCheck={false}
+              />
             </div>
           )}
 
@@ -309,6 +368,72 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
             <p className="text-xs text-muted-foreground mt-1">
               點擊後自動載入全部視覺模型，輸入關鍵字即時篩選。定價為輸入 token 費用。
             </p>
+          </div>
+
+          <Separator />
+
+          {/* 畫作資訊 */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">畫作資訊 <span className="text-xs text-muted-foreground font-normal">（提供越完整，AI 分析越精準）</span></p>
+              <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={unknownPainting}
+                  onChange={e => setUnknownPainting(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
+                />
+                <span className="text-xs text-muted-foreground whitespace-nowrap">不知道，讓 AI 自行辨識</span>
+              </label>
+            </div>
+            {!unknownPainting && (<>
+              <div className="flex gap-2">
+                <div className="flex-1 min-w-0">
+                  <Label className="mb-1 block text-xs text-muted-foreground">畫作標題</Label>
+                  <Input value={paintTitle} onChange={e => setPaintTitle(e.target.value)} placeholder="例：蒙娜麗莎" className="h-8 text-sm" />
+                </div>
+                <div className="w-20 shrink-0">
+                  <Label className="mb-1 block text-xs text-muted-foreground">年份</Label>
+                  <Input value={paintYear} onChange={e => setPaintYear(e.target.value)} placeholder="1503" className="h-8 text-sm" />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1 min-w-0">
+                  <Label className="mb-1 block text-xs text-muted-foreground">藝術家</Label>
+                  <Input value={paintArtist} onChange={e => setPaintArtist(e.target.value)} placeholder="例：達文西" className="h-8 text-sm" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <Label className="mb-1 block text-xs text-muted-foreground">收藏地點</Label>
+                  <Input value={paintCollection} onChange={e => setPaintCollection(e.target.value)} placeholder="例：羅浮宮" className="h-8 text-sm" />
+                </div>
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs text-muted-foreground">視覺描述風格</Label>
+                <Select value={paintVisualSel} onChange={e => setPaintVisualSel(e.target.value)}>
+                  <option value="">請選擇描述風格…</option>
+                  {VISUAL_DESC_OPTS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </Select>
+                {paintVisualSel === '__custom__' && (
+                  <Textarea
+                    value={paintVisualCustom}
+                    onChange={e => setPaintVisualCustom(e.target.value)}
+                    placeholder="請描述畫作中的人物、場景、光線、手勢、表情、背景等細節…"
+                    className="mt-2 text-sm"
+                  />
+                )}
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs text-muted-foreground">強調主題</Label>
+                <Select value={paintTheme} onChange={e => setPaintTheme(e.target.value)}>
+                  <option value="">請選擇主題…</option>
+                  {THEME_OPTS.map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </Select>
+              </div>
+            </>)}
           </div>
 
           {/* Status messages */}

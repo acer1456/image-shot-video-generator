@@ -1,4 +1,4 @@
-import type { CameraPoint, CaptionData, BackgroundSettings } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, SubtitleStyle } from '@/types'
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
@@ -170,7 +170,9 @@ export function drawCamera(
   includeGuides: boolean,
   showCaptionBox: boolean,
   snapGuide: { x: boolean; y: boolean },
-  activeCaptionIndex = 0
+  activeCaptionIndex = 0,
+  narrationText?: string,
+  subtitleStyle?: SubtitleStyle
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
@@ -194,6 +196,100 @@ export function drawCamera(
       drawCaption(canvas, ctx, cap, includeGuides && i === activeCaptionIndex && showCaptionBox, snapGuide)
     })
   }
+  if (narrationText) {
+    drawNarrationSubtitle(canvas, ctx, narrationText, subtitleStyle)
+  }
+}
+
+/**
+ * Greedily wraps words into lines that each fit within maxWidth using ctx.measureText.
+ * The ctx.font must already be set to the desired font before calling this function.
+ * No text deformation or font-size changes — lines simply break at word boundaries.
+ */
+export function wrapWordsToLines(
+  words: string[],
+  ctx: CanvasRenderingContext2D,
+  maxWidth: number
+): string[] {
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word
+    if (current && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(current)
+      current = word
+    } else {
+      current = candidate
+    }
+  }
+  if (current) lines.push(current)
+  return lines
+}
+
+function hasCjkText(text: string) {
+  return /[\u3400-\u9fff]/.test(text)
+}
+
+export function drawNarrationSubtitle(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  style?: SubtitleStyle
+) {
+  if (!text) return
+  ctx.save()
+  const sizeRatio = style?.fontSizeRatio ?? 0.055
+  const fontFamily = style?.fontFamily ?? "Georgia, 'Times New Roman', serif"
+  const fontSize = Math.round(canvas.width * sizeRatio)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  // Fixed side padding — text stays within this boundary, font size never changes.
+  const sidePadding = Math.round(canvas.width * 0.06)
+  const maxLineWidth = canvas.width - sidePadding * 2
+
+  const [mainText = '', subText = ''] = text.split('\n')
+  ctx.font = `700 ${fontSize}px ${fontFamily}`
+  const mainLines = mainText.trim() ? [mainText.trim()] : []
+  const subFontSize = Math.round(fontSize * 0.72)
+  ctx.font = `650 ${subFontSize}px ${fontFamily}`
+  const trimmedSubText = subText.trim()
+  const subLines = trimmedSubText
+    ? hasCjkText(trimmedSubText)
+      ? wrapWordsToLines(Array.from(trimmedSubText), ctx, maxLineWidth).map(line => line.replace(/\s+/g, ''))
+      : wrapWordsToLines(trimmedSubText.split(/\s+/), ctx, maxLineWidth)
+    : []
+
+  const posX = style?.subtitlePosition?.x ?? 0.5
+  const posY = style?.subtitlePosition?.y ?? 0.87
+  const cx = canvas.width * posX
+  const lineHeight = Math.round(fontSize * 1.35)
+  const subLineHeight = Math.round(subFontSize * 1.35)
+  const centerY = Math.round(canvas.height * posY)
+
+  const shadowEnabled = style?.shadowEnabled ?? true
+  const shadowBlur = style?.shadowBlur ?? 10
+  const shadowOpacity = style?.shadowOpacity ?? 0.9
+  ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${shadowOpacity})` : 'transparent'
+  ctx.shadowBlur = shadowEnabled ? shadowBlur : 0
+  ctx.shadowOffsetX = shadowEnabled ? 2 : 0
+  ctx.shadowOffsetY = shadowEnabled ? 2 : 0
+  ctx.fillStyle = '#ffffff'
+
+  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+  let y = centerY - totalHeight / 2 + lineHeight / 2
+  ctx.font = `700 ${fontSize}px ${fontFamily}`
+  for (const line of mainLines) {
+    ctx.fillText(line, cx, y)
+    y += lineHeight
+  }
+  ctx.font = `650 ${subFontSize}px ${fontFamily}`
+  for (const line of subLines) {
+    ctx.fillText(line, cx, y - (lineHeight - subLineHeight) / 2)
+    y += subLineHeight
+  }
+
+  ctx.restore()
 }
 
 export function drawCaption(

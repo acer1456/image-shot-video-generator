@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
-import type { CameraPoint, BackgroundSettings, SafeAreaVisibility, ActiveTab, DragState } from '@/types'
+import type { CameraPoint, BackgroundSettings, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
 import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
@@ -21,6 +21,7 @@ interface CanvasEditorProps {
   onlyActiveBox: boolean
   showCaptionBox: boolean
   showGuidesInPreview: boolean
+  showCameraCaptionsInOutput: boolean
   isRendering: boolean
   isPreviewing: boolean
   onPointAdd: (x: number, y: number) => void
@@ -42,20 +43,34 @@ interface CanvasEditorProps {
   onBackToCamera?: () => void
   activeCaptionIndex?: number
   onCaptionSelect?: (captionIndex: number) => void
+  narrationText?: string
+  subtitleStyle?: SubtitleStyle
+  onSubtitlePositionChange?: (pos: { x: number; y: number }) => void
+}
+
+interface CaptionDragPreview {
+  pointIndex: number
+  captionIndex: number
+  x: number
+  y: number
+  snapGuide: { x: boolean; y: boolean }
 }
 
 export default function CanvasEditor({
   image, points, activeIndex, activeTab,
   backgroundSettings, safeAreaVisibility,
-  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
+  showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput,
   isRendering, isPreviewing,
   onPointAdd, onPointMove, onPointResize, onPointSelect,
   onCaptionMove, onCaptionFontResize, onCaptionBoxWidth, onCaptionBoxHeight,
   onDragEnd, snapGuide, setSnapGuide, dragStateRef, currentTimeRef, forceRedraw,
   onPointDelete, onEnterCaption, onBackToCamera,
   activeCaptionIndex = 0, onCaptionSelect,
+  narrationText, subtitleStyle, onSubtitlePositionChange,
 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const captionDragPreviewRef = useRef<CaptionDragPreview | null>(null)
+  const captionDragFrameRef = useRef<number | null>(null)
   const { resolvedTheme } = useTheme()
 
   const getCssVar = useCallback((name: string, fallback: string) => {
@@ -68,15 +83,17 @@ export default function CanvasEditor({
     // A React re-render caused by setActiveIndex would otherwise call drawBase(),
     // which resets canvas.width (clears it) and draws the editor overview —
     // causing a corrupted frame to be captured by captureStream.
-    if (isRendering) return
+    // During preview the drawTimelineTime loop owns the canvas; drawBase must
+    // not overwrite those frames (it lacks the progressive narration text).
+    if (isRendering || isPreviewing) return
 
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    canvas.width = OUTPUT_W
-    canvas.height = OUTPUT_H
+    if (canvas.width !== OUTPUT_W) canvas.width = OUTPUT_W
+    if (canvas.height !== OUTPUT_H) canvas.height = OUTPUT_H
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const isDark = resolvedTheme === 'dark'
@@ -98,7 +115,8 @@ export default function CanvasEditor({
 
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
       const camera = getCameraForPoint(image, points[activeIndex])
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, points[activeIndex], showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex)
+      const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
+      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle)
       if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
       return
     }
@@ -109,7 +127,78 @@ export default function CanvasEditor({
     ctx.drawImage(image, r.x, r.y, r.w, r.h)
 
     if (showGuides) drawEditorGuides(canvas, ctx)
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex])
+  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle])
+
+  const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
+    const canvas = canvasRef.current
+    const point = points[preview.pointIndex]
+    if (!canvas || !image || !point || isRendering || isPreviewing) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    let previewPoint: CameraPoint
+    if (preview.captionIndex === 0) {
+      previewPoint = {
+        ...point,
+        caption: { ...point.caption, x: preview.x, y: preview.y },
+      }
+    } else {
+      const extraIndex = preview.captionIndex - 1
+      const extraCaptions = [...(point.extraCaptions || [])]
+      if (!extraCaptions[extraIndex]) return
+      extraCaptions[extraIndex] = {
+        ...extraCaptions[extraIndex],
+        x: preview.x,
+        y: preview.y,
+      }
+      previewPoint = { ...point, extraCaptions }
+    }
+
+    const showGuides = !isRendering && (!isPreviewing || showGuidesInPreview)
+    const camera = getCameraForPoint(image, point)
+    const captionPoint = showCameraCaptionsInOutput ? previewPoint : null
+    drawCamera(
+      canvas,
+      ctx,
+      image,
+      camera,
+      backgroundSettings,
+      captionPoint,
+      showGuides && showCaptionBox,
+      showCaptionBox,
+      preview.snapGuide,
+      preview.captionIndex,
+      narrationText,
+      subtitleStyle,
+    )
+    if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
+  }, [
+    backgroundSettings,
+    image,
+    isPreviewing,
+    isRendering,
+    narrationText,
+    points,
+    safeAreaVisibility,
+    showCameraCaptionsInOutput,
+    showCaptionBox,
+    showGuidesInPreview,
+    subtitleStyle,
+  ])
+
+  const scheduleCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
+    captionDragPreviewRef.current = preview
+    if (captionDragFrameRef.current != null) return
+    captionDragFrameRef.current = requestAnimationFrame(() => {
+      captionDragFrameRef.current = null
+      const current = captionDragPreviewRef.current
+      if (current) drawCaptionDragPreview(current)
+    })
+  }, [drawCaptionDragPreview])
+
+  useEffect(() => () => {
+    if (captionDragFrameRef.current != null) cancelAnimationFrame(captionDragFrameRef.current)
+  }, [])
 
   const drawEditorGuides = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
     if (!image || !points.length) return
@@ -157,6 +246,29 @@ export default function CanvasEditor({
     ctx.strokeRect(box.x, box.y, box.w, box.h)
     ctx.restore()
     if (active) {
+      // 移動 handle（左下角）
+      const moveHX = box.x
+      const moveHY = box.y + box.h
+      ctx.beginPath()
+      ctx.arc(moveHX, moveHY, 18, 0, Math.PI * 2)
+      ctx.fillStyle = 'white'
+      ctx.fill()
+      ctx.strokeStyle = '#22c55e'
+      ctx.lineWidth = 6
+      ctx.stroke()
+      ctx.save()
+      ctx.strokeStyle = '#22c55e'
+      ctx.lineWidth = 4
+      ctx.lineCap = 'round'
+      const ms = 7
+      ctx.beginPath()
+      ctx.moveTo(moveHX - ms, moveHY)
+      ctx.lineTo(moveHX + ms, moveHY)
+      ctx.moveTo(moveHX, moveHY - ms)
+      ctx.lineTo(moveHX, moveHY + ms)
+      ctx.stroke()
+      ctx.restore()
+
       // resize handle（右下角）
       ctx.fillStyle = 'white'
       ctx.beginPath()
@@ -232,6 +344,13 @@ export default function CanvasEditor({
     }
   }
 
+  const isOnMoveHandle = (x: number, y: number) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
+    const box = getViewBoxCanvas(canvas, image, points[activeIndex])
+    return distance(x, y, box.x, box.y + box.h) <= 36
+  }
+
   const isOnActiveResizeHandle = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
@@ -286,6 +405,11 @@ export default function CanvasEditor({
   const findHitPoint = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image) return -1
+    if (!showAllPoints) {
+      if (activeIndex < 0 || !points[activeIndex]) return -1
+      const c = imageToCanvasPoint(canvas, image, points[activeIndex])
+      return distance(x, y, c.x, c.y) <= 42 ? activeIndex : -1
+    }
     for (let i = points.length - 1; i >= 0; i--) {
       const c = imageToCanvasPoint(canvas, image, points[i])
       if (distance(x, y, c.x, c.y) <= 42) return i
@@ -300,13 +424,40 @@ export default function CanvasEditor({
     const pos = getCanvasPointer(event)
 
     if (activeTab === 'caption') {
+      // Camera captions use precise box hit-testing and take priority over narration subtitles.
       const hit = getCaptionHit(pos.x, pos.y)
       if (hit) {
         if (hit.captionIndex !== activeCaptionIndex && onCaptionSelect) {
           onCaptionSelect(hit.captionIndex)
         }
-        dragStateRef.current = { type: hit.type as DragState['type'], index: activeIndex, captionIndex: hit.captionIndex }
+        const caption = getAllCaptions(points[activeIndex])[hit.captionIndex]
+        dragStateRef.current = {
+          type: hit.type as DragState['type'],
+          index: activeIndex,
+          captionIndex: hit.captionIndex,
+          offsetX: hit.type === 'captionMove' && caption ? pos.x - caption.x * (canvasRef.current?.width ?? 0) : undefined,
+          offsetY: hit.type === 'captionMove' && caption ? pos.y - caption.y * (canvasRef.current?.height ?? 0) : undefined,
+        }
         return
+      }
+
+      // Narration subtitle drag: check if pointer is near subtitle area.
+      if (narrationText && subtitleStyle && onSubtitlePositionChange) {
+        const canvas = canvasRef.current
+        if (canvas) {
+          const subX = canvas.width * (subtitleStyle.subtitlePosition?.x ?? 0.5)
+          const subY = canvas.height * (subtitleStyle.subtitlePosition?.y ?? 0.895)
+          const hitRadius = canvas.height * 0.07
+          if (Math.abs(pos.y - subY) < hitRadius) {
+            dragStateRef.current = {
+              type: 'subtitleMove',
+              index: activeIndex,
+              offsetX: pos.x - subX,
+              offsetY: pos.y - subY,
+            }
+            return
+          }
+        }
       }
     }
 
@@ -325,6 +476,19 @@ export default function CanvasEditor({
       return
     }
 
+    if (isOnMoveHandle(pos.x, pos.y)) {
+      const canvas = canvasRef.current!
+      const p = points[activeIndex]
+      const center = imageToCanvasPoint(canvas, image, p)
+      dragStateRef.current = {
+        type: 'move',
+        index: activeIndex,
+        offsetX: pos.x - center.x,
+        offsetY: pos.y - center.y,
+      }
+      return
+    }
+
     const hitPoint = findHitPoint(pos.x, pos.y)
     if (hitPoint >= 0) {
       onPointSelect(hitPoint)
@@ -335,6 +499,8 @@ export default function CanvasEditor({
     if (activeTab === 'camera') {
       const canvas = canvasRef.current
       if (!canvas) return
+      const r = fitImageRect(canvas, image)
+      if (pos.x < r.x || pos.x > r.x + r.w || pos.y < r.y || pos.y > r.y + r.h) return
       const ratio = canvasToImageRatio(canvas, image, pos.x, pos.y)
       onPointAdd(ratio.x, ratio.y)
       dragStateRef.current = { type: 'move', index: points.length }
@@ -346,11 +512,31 @@ export default function CanvasEditor({
     if (!canvas || !image || !dragStateRef.current || isRendering) return
     const pos = getCanvasPointer(event)
     const drag = dragStateRef.current
+
+    if (drag.type === 'subtitleMove') {
+      if (onSubtitlePositionChange) {
+        const snapPx = 28
+        const rawX = pos.x - (drag.offsetX ?? 0)
+        const rawY = pos.y - (drag.offsetY ?? 0)
+        const newSnap = {
+          x: Math.abs(rawX - canvas.width / 2) <= snapPx,
+          y: Math.abs(rawY - canvas.height / 2) <= snapPx,
+        }
+        setSnapGuide(newSnap)
+        let nextX = clamp(rawX / canvas.width, 0.05, 0.95)
+        let nextY = clamp(rawY / canvas.height, 0.1, 0.97)
+        if (newSnap.x) nextX = 0.5
+        if (newSnap.y) nextY = 0.5
+        onSubtitlePositionChange({ x: nextX, y: nextY })
+      }
+      return
+    }
+
     const p = points[drag.index]
     if (!p) return
 
     if (drag.type === 'move') {
-      const ratio = canvasToImageRatio(canvas, image, pos.x, pos.y)
+      const ratio = canvasToImageRatio(canvas, image, pos.x - (drag.offsetX ?? 0), pos.y - (drag.offsetY ?? 0))
       onPointMove(drag.index, ratio.x, ratio.y)
     }
     if (drag.type === 'resize') {
@@ -363,21 +549,28 @@ export default function CanvasEditor({
       const OUTPUT_RATIO = OUTPUT_W / OUTPUT_H
       if (naturalRatio > OUTPUT_RATIO) { baseW = image.width; baseH = baseW / OUTPUT_RATIO }
       else { baseH = image.height; baseW = baseH * OUTPUT_RATIO }
-      const zoom = clamp(Math.min(baseW / Math.max(1, desiredW), baseH / Math.max(1, desiredH)), 1, 8)
+      const zoom = clamp(Math.min(baseW / Math.max(1, desiredW), baseH / Math.max(1, desiredH)), 1, 15)
       onPointResize(drag.index, zoom)
     }
     if (drag.type === 'captionMove') {
       const snapPx = 28
-      let nextX = pos.x / canvas.width
-      let nextY = pos.y / canvas.height
+      const rawX = pos.x - (drag.offsetX ?? 0)
+      const rawY = pos.y - (drag.offsetY ?? 0)
+      let nextX = rawX / canvas.width
+      let nextY = rawY / canvas.height
       const newSnap = {
-        x: Math.abs(pos.x - canvas.width / 2) <= snapPx,
-        y: Math.abs(pos.y - canvas.height / 2) <= snapPx
+        x: Math.abs(rawX - canvas.width / 2) <= snapPx,
+        y: Math.abs(rawY - canvas.height / 2) <= snapPx
       }
-      setSnapGuide(newSnap)
       if (newSnap.x) nextX = 0.5
       if (newSnap.y) nextY = 0.5
-      onCaptionMove(drag.index, drag.captionIndex ?? 0, clamp(nextX, 0.03, 0.97), clamp(nextY, 0.03, 0.97))
+      scheduleCaptionDragPreview({
+        pointIndex: drag.index,
+        captionIndex: drag.captionIndex ?? 0,
+        x: clamp(nextX, 0.03, 0.97),
+        y: clamp(nextY, 0.03, 0.97),
+        snapGuide: newSnap,
+      })
     }
     if (drag.type === 'captionFontResize') {
       const ctx = canvas.getContext('2d')
@@ -417,7 +610,23 @@ export default function CanvasEditor({
     }
   }
 
-  const handlePointerUp = () => {
+  const finishPointerDrag = (commitCaptionMove: boolean) => {
+    const drag = dragStateRef.current
+    const preview = captionDragPreviewRef.current
+    if (captionDragFrameRef.current != null) {
+      cancelAnimationFrame(captionDragFrameRef.current)
+      captionDragFrameRef.current = null
+    }
+    if (
+      commitCaptionMove &&
+      drag?.type === 'captionMove' &&
+      preview &&
+      preview.pointIndex === drag.index &&
+      preview.captionIndex === (drag.captionIndex ?? 0)
+    ) {
+      onCaptionMove(preview.pointIndex, preview.captionIndex, preview.x, preview.y)
+    }
+    captionDragPreviewRef.current = null
     dragStateRef.current = null
     setSnapGuide({ x: false, y: false })
     onDragEnd()
@@ -435,8 +644,8 @@ export default function CanvasEditor({
       className="relative flex items-center justify-center h-full min-h-0"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerUp={() => finishPointerDrag(true)}
+      onPointerCancel={() => finishPointerDrag(false)}
     >
       <canvas
         ref={canvasRef}

@@ -7,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
 import { Separator } from '@/components/ui/separator'
 import { clamp } from '@/lib/utils'
-import { GripVertical, Plus, Trash2, Copy, ChevronsLeft, ChevronsRight, ChevronDown, ChevronUp } from 'lucide-react'
+import { GripVertical, Plus, Trash2, Copy, ChevronsLeft, ChevronsRight, ChevronDown, ChevronUp, Type } from 'lucide-react'
 import { drawPointThumbnail } from '@/lib/canvas'
 
 interface CameraPanelProps {
@@ -24,6 +24,7 @@ interface CameraPanelProps {
   onInsertAfter: (afterIndex: number) => void
   onDuplicate: (index: number) => void
   onReorder: (newPoints: CameraPoint[], newActiveIndex: number) => void
+  onOpenCaption: (index: number) => void
 }
 
 // 縮圖子元件：在 off-screen canvas 上用 drawPointThumbnail 繪製後顯示
@@ -56,7 +57,7 @@ function CameraThumbnail({
 export default function CameraPanel({
   points, activeIndex, hasImage, image, backgroundSettings,
   onSelect, onRemove, onUpdateField, onAddStart, onAddEnd,
-  onInsertAfter, onDuplicate, onReorder,
+  onInsertAfter, onDuplicate, onReorder, onOpenCaption,
 }: CameraPanelProps) {
   const listRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<Array<HTMLDivElement | null>>([])
@@ -220,12 +221,21 @@ export default function CameraPanel({
                     )}
                   </div>
 
-                  {/* 展開指示 + 複製 + 刪除 */}
+                  {/* 展開指示 + 字幕 + 複製 + 刪除 */}
                   <div className="flex items-center gap-0.5 flex-shrink-0">
                     {isActive
                       ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
                       : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                     }
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-yellow-500 hover:text-yellow-400 hover:bg-yellow-500/10"
+                      onClick={e => { e.stopPropagation(); onOpenCaption(index) }}
+                      title="編輯字幕"
+                    >
+                      <Type className="h-3.5 w-3.5" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -253,8 +263,8 @@ export default function CameraPanel({
                       <Label className="mb-1 block">可視範圍 (Zoom {p.zoom.toFixed(2)}x)</Label>
                       <Slider
                         value={p.zoom}
-                        min={1} max={8} step={0.05}
-                        onChange={v => onUpdateField(index, 'zoom', clamp(v, 1, 8))}
+                        min={1} max={15} step={0.05}
+                        onChange={v => onUpdateField(index, 'zoom', clamp(v, 1, 15))}
                       />
                     </div>
 
