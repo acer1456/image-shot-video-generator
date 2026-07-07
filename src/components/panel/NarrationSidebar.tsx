@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, Camera,
-  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal,
+  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, RotateCcw, SlidersHorizontal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -9,14 +9,17 @@ import { Slider } from '@/components/ui/slider'
 import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clampPauseIntensity, useheadTTS } from '@/hooks/useheadTTS'
-import { translateNarrationCues } from '@/lib/openrouter'
+import {
+  DEFAULT_NARRATION_TRANSLATION_MODEL, fetchAllTranslationModels, translateNarrationCues,
+  type OpenRouterModelInfo,
+} from '@/lib/openrouter'
 import {
   NarrationAIPanel,
   type NarrationAICameraResult,
   type NarrationAIMode,
   type NarrationAIStoryResult,
 } from '@/components/panel/NarrationAIPanel'
-import { createNarrationMixdown, getNarrationDuration } from '@/lib/narration'
+import { applyNarrationLineTranslations, createNarrationMixdown, getNarrationDuration, parseNarrationInput } from '@/lib/narration'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -26,6 +29,9 @@ const FONT_OPTIONS = [
 ]
 
 const PAUSE_LABELS = ['關閉', '很短', '短', '自然', '明顯', '偏慢', '慢節奏']
+
+const LS_TRANSLATION_MODEL = 'narration_translation_model'
+const LS_TRANSLATION_MODEL_NAME = 'narration_translation_model_name'
 
 export interface NarrationSidebarProps {
   track: NarrationTrack | null
@@ -123,6 +129,10 @@ export function NarrationSidebar({
   const [aiPanelMode, setAiPanelMode] = useState<NarrationAIMode | null>(null)
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationError, setTranslationError] = useState('')
+  const [translationModel, setTranslationModel] = useState(() => localStorage.getItem(LS_TRANSLATION_MODEL) || DEFAULT_NARRATION_TRANSLATION_MODEL)
+  const [translationModels, setTranslationModels] = useState<OpenRouterModelInfo[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsError, setModelsError] = useState('')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<{ trackId: string; url: string } | null>(null)
 
@@ -151,6 +161,36 @@ export function NarrationSidebar({
     if (track?.pauseIntensity != null) setPauseIntensity(clampPauseIntensity(track.pauseIntensity))
   }, [track?.pauseIntensity])
 
+  const loadFreeModels = useCallback(async () => {
+    const apiKey = localStorage.getItem('openrouter_api_key') ?? ''
+    if (!apiKey.trim()) {
+      setModelsError('請先在 AI 面板輸入 OpenRouter API Key')
+      return
+    }
+    setLoadingModels(true)
+    setModelsError('')
+    try {
+      const list = await fetchAllTranslationModels(apiKey.trim())
+      setTranslationModels(list)
+    } catch (error) {
+      setModelsError(error instanceof Error ? error.message : '載入模型列表失敗')
+    } finally {
+      setLoadingModels(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (localStorage.getItem('openrouter_api_key')?.trim()) loadFreeModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const selectTranslationModel = useCallback((id: string) => {
+    setTranslationModel(id)
+    localStorage.setItem(LS_TRANSLATION_MODEL, id)
+    const match = translationModels.find(m => m.id === id)
+    if (match) localStorage.setItem(LS_TRANSLATION_MODEL_NAME, match.name)
+  }, [translationModels])
+
   const handleGenerate = useCallback(async () => {
     const trimmed = inputText.trim()
     if (!trimmed || isGenerating) return
@@ -163,11 +203,13 @@ export function NarrationSidebar({
     }
     try {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-      const result = await generate(trimmed, voice, speed, pauseIntensity)
+      const { ttsText, lines } = parseNarrationInput(trimmed)
+      const result = await generate(ttsText, voice, speed, pauseIntensity)
       onTrackChange(result.track)
       if (shouldCreateSubtitles) {
-        onSubtitleCuesChange(result.subtitleCues)
-        onActiveSubtitleIdChange(result.subtitleCues[0]?.id ?? null)
+        const cues = applyNarrationLineTranslations(result.subtitleCues, result.track.segments, lines, pauseIntensity)
+        onSubtitleCuesChange(cues)
+        onActiveSubtitleIdChange(cues[0]?.id ?? null)
       }
       setShowPrompt(false)
     } catch {
@@ -226,6 +268,10 @@ export function NarrationSidebar({
     ))
   }, [activeCue, onSubtitleCuesChange, subtitleCues])
 
+  const updateCueField = useCallback((id: string, patch: Partial<Pick<SubtitleCue, 'text' | 'translation'>>) => {
+    onSubtitleCuesChange(subtitleCues.map(cue => cue.id === id ? { ...cue, ...patch } : cue))
+  }, [onSubtitleCuesChange, subtitleCues])
+
   const swapAllCueText = useCallback(() => {
     if (!subtitleCues.length) return
     onSubtitleCuesChange(subtitleCues.map(cue => ({
@@ -282,6 +328,7 @@ export function NarrationSidebar({
     try {
       const result = await translateNarrationCues(
         apiKey.trim(),
+        translationModel,
         narrationText,
         subtitleCues.map((cue, index) => ({
           id: cue.id,
@@ -301,7 +348,7 @@ export function NarrationSidebar({
     } finally {
       setIsTranslating(false)
     }
-  }, [inputText, isTranslating, onSubtitleCuesChange, subtitleCues, track])
+  }, [inputText, isTranslating, onSubtitleCuesChange, subtitleCues, track, translationModel])
 
   let statusNode: React.ReactNode = null
   if (status.phase === 'loading') {
@@ -409,7 +456,7 @@ export function NarrationSidebar({
       {showPrompt && (
         <div className="p-3 flex flex-col gap-2 flex-shrink-0">
           <Textarea
-            placeholder="輸入完整英文旁白內容…"
+            placeholder={'輸入完整英文旁白內容…\n也可以英文、中文逐行交錯輸入，中文行只會填入字幕副字幕，不會唸出'}
             className="text-xs resize-none min-h-[96px]"
             value={inputText}
             onChange={e => onInputTextChange(e.target.value)}
@@ -477,65 +524,96 @@ export function NarrationSidebar({
       )}
 
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
-        {!activeCue ? (
+        {subtitleCues.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6 px-2 opacity-60">
-            生成旁白後，點擊時間軸上的字幕區塊即可編輯字幕卡片
+            生成旁白後即可逐句編輯字幕
           </p>
         ) : (
           <>
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-muted-foreground">字幕卡片</span>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-muted-foreground">
-                    {formatSecs(activeCue.startTime)} / {formatSecs(activeCue.duration)}
-                  </span>
-                  <button
-                    onClick={swapAllCueText}
-                    title="對調全部英文與中文字幕"
-                    className="h-6 w-6 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
-                  >
-                    <ArrowLeftRight className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setShowSubtitleStyle(v => !v)}
-                    title="字幕樣式"
-                    className={`h-6 w-6 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${showSubtitleStyle ? 'text-primary' : 'text-muted-foreground'}`}
-                  >
-                    <SlidersHorizontal className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-              <Textarea
-                className="text-xs resize-none min-h-[64px]"
-                value={activeCue.text}
-                onChange={e => updateActiveCue({ text: e.target.value })}
-              />
-              <Textarea
-                placeholder="中文字幕／副字幕"
-                className="text-xs resize-none min-h-[64px]"
-                value={activeCue.translation}
-                onChange={e => updateActiveCue({ translation: e.target.value })}
-              />
-              <div className="flex flex-col gap-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs justify-center"
-                  disabled={isTranslating || subtitleCues.length === 0 || !(track?.text || inputText).trim()}
-                  onClick={handleTranslate}
+              <div className="flex items-center gap-1">
+                <select
+                  className="flex-1 min-w-0 text-xs rounded-md border border-input bg-background px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
+                  value={translationModel}
+                  onChange={e => selectTranslationModel(e.target.value)}
                 >
-                  {isTranslating
-                    ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                    : <Languages className="h-3.5 w-3.5 mr-1" />}
-                  產生中文字幕
-                </Button>
-                {translationError && (
-                  <p className="text-[10px] text-red-500 leading-snug">{translationError}</p>
-                )}
+                  {!translationModels.some(m => m.id === translationModel) && (
+                    <option value={translationModel}>{translationModel}</option>
+                  )}
+                  {translationModels.map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={loadFreeModels}
+                  title="載入模型列表"
+                  disabled={loadingModels}
+                  className="h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                >
+                  {loadingModels ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  onClick={swapAllCueText}
+                  title="對調全部英文與中文字幕"
+                  className="h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                </button>
               </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs justify-center"
+                disabled={isTranslating || !(track?.text || inputText).trim()}
+                onClick={handleTranslate}
+              >
+                {isTranslating
+                  ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                  : <Languages className="h-3.5 w-3.5 mr-1" />}
+                產生中文字幕
+              </Button>
+              {(translationError || modelsError) && (
+                <p className="text-[10px] text-red-500 leading-snug">{translationError || modelsError}</p>
+              )}
             </div>
-          
+
+            <div className="flex flex-col gap-2">
+              {[...subtitleCues].sort((a, b) => a.startTime - b.startTime).map(cue => {
+                const isActive = cue.id === activeSubtitleId
+                return (
+                  <div
+                    key={cue.id}
+                    onClick={() => onActiveSubtitleIdChange(cue.id)}
+                    className={`rounded-lg border p-2 flex flex-col gap-2 transition-colors cursor-pointer ${isActive ? 'border-primary bg-background/60' : 'border-border bg-background/60 hover:border-muted-foreground/40'}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                        {formatSecs(cue.startTime)}
+                      </span>
+                      <span className="flex-1" />
+                      <button
+                        onClick={() => setShowSubtitleStyle(v => !v)}
+                        title="字幕樣式"
+                        className={`h-6 w-6 rounded-full flex items-center justify-center hover:bg-muted transition-colors ${isActive && showSubtitleStyle ? 'text-primary' : 'text-muted-foreground'}`}
+                      >
+                        <SlidersHorizontal className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <Textarea
+                      className="text-xs resize-none min-h-[64px]"
+                      value={cue.text}
+                      onChange={e => updateCueField(cue.id, { text: e.target.value })}
+                    />
+                    <Textarea
+                      placeholder="中文字幕／副字幕"
+                      className="text-xs resize-none min-h-[64px]"
+                      value={cue.translation}
+                      onChange={e => updateCueField(cue.id, { translation: e.target.value })}
+                    />
+
+                    {isActive && (
+                      <>
+
           {showSubtitleStyle && (
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-3">
               <div className="flex items-center justify-between">
@@ -794,6 +872,12 @@ export function NarrationSidebar({
               )}
             </div>
             )}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </>
         )}
       </div>

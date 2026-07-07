@@ -1,5 +1,66 @@
 import type { MutableRefObject } from 'react'
-import type { NarrationTrack, SubtitleCue } from '@/types'
+import type { NarrationAudioSegment, NarrationTrack, SubtitleCue } from '@/types'
+import { parseNarrationSpeechSegments } from '@/hooks/useheadTTS'
+
+const CJK_REGEX = /[㐀-鿿]/
+
+interface NarrationInputLine {
+  english: string
+  translation: string
+}
+
+// ponytail: 用「是否含中日韓字元」判斷行別，不用整段模式偵測；純英文與英中交錯輸入都能直接吃這一條路徑
+export function parseNarrationInput(raw: string): { ttsText: string; lines: NarrationInputLine[] } {
+  const lines: NarrationInputLine[] = []
+  const ttsLines: string[] = []
+  let pendingEnglish: string | null = null
+
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) { ttsLines.push(''); continue }
+    if (CJK_REGEX.test(line)) {
+      if (pendingEnglish !== null) {
+        lines.push({ english: pendingEnglish, translation: line })
+        pendingEnglish = null
+      }
+      continue
+    }
+    if (pendingEnglish !== null) lines.push({ english: pendingEnglish, translation: '' })
+    pendingEnglish = line
+    ttsLines.push(line)
+  }
+  if (pendingEnglish !== null) lines.push({ english: pendingEnglish, translation: '' })
+
+  return { ttsText: ttsLines.join('\n'), lines }
+}
+
+// 每個英文輸入行在 TTS 內部會被切成 1 個以上的語音片段（句尾標點、換行都會強制斷句）
+// parseNarrationSpeechSegments 是純函式，單獨對一行呼叫即可還原它在完整文本中會產生的片段數，藉此對齊 track.segments 的順序
+export function applyNarrationLineTranslations(
+  cues: SubtitleCue[],
+  segments: NarrationAudioSegment[],
+  lines: NarrationInputLine[],
+  pauseIntensity: number,
+): SubtitleCue[] {
+  let segmentCursor = 0
+  const ranges: Array<{ translation: string; startWord: number; endWord: number }> = []
+  for (const line of lines) {
+    const segCount = parseNarrationSpeechSegments(line.english, pauseIntensity).length
+    const group = segments.slice(segmentCursor, segmentCursor + segCount)
+    segmentCursor += segCount
+    if (!line.translation || !group.length) continue
+    ranges.push({
+      translation: line.translation,
+      startWord: Math.min(...group.map(s => s.wordStartIndex)),
+      endWord: Math.max(...group.map(s => s.wordEndIndex)),
+    })
+  }
+  if (!ranges.length) return cues
+  return cues.map(cue => {
+    const match = ranges.find(r => cue.wordStartIndex >= r.startWord && cue.wordStartIndex <= r.endWord)
+    return match ? { ...cue, translation: match.translation } : cue
+  })
+}
 
 export function getActiveSubtitleCue(cues: SubtitleCue[], time: number): SubtitleCue | null {
   return cues.find(cue => time >= cue.startTime && time < cue.startTime + cue.duration) ?? null

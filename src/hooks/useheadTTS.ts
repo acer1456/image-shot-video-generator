@@ -122,7 +122,7 @@ function pushSpeechSegment(segments: SpeechSegment[], text: string, pauseAfterMs
   segments.push({ text: normalized, pauseAfterMs: pause })
 }
 
-function parseNarrationSpeechSegments(text: string, pauseIntensity: number): SpeechSegment[] {
+export function parseNarrationSpeechSegments(text: string, pauseIntensity: number): SpeechSegment[] {
   const preset = PAUSE_PRESETS[clampPauseIntensity(pauseIntensity)]
   const segments: SpeechSegment[] = []
   let buffer = ''

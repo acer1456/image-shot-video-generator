@@ -56,13 +56,22 @@ export interface OpenRouterModelInfo {
   architecture: { modality: string }
 }
 
-export async function fetchOpenRouterModels(apiKey: string): Promise<OpenRouterModelInfo[]> {
+async function fetchAllOpenRouterModels(apiKey: string): Promise<OpenRouterModelInfo[]> {
   const res = await fetch('https://openrouter.ai/api/v1/models', {
     headers: { 'Authorization': `Bearer ${apiKey}` },
   })
   if (!res.ok) throw new Error(`無法取得模型列表 (${res.status})`)
   const data = await res.json()
-  const all = data.data as OpenRouterModelInfo[]
+  return data.data as OpenRouterModelInfo[]
+}
+
+export async function fetchAllTranslationModels(apiKey: string): Promise<OpenRouterModelInfo[]> {
+  const all = await fetchAllOpenRouterModels(apiKey)
+  return all.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+export async function fetchOpenRouterModels(apiKey: string): Promise<OpenRouterModelInfo[]> {
+  const all = await fetchAllOpenRouterModels(apiKey)
   // Keep only vision-capable models (modality contains "image")
   return all
     .filter(m => m.architecture?.modality?.toLowerCase().includes('image'))
@@ -323,7 +332,7 @@ export async function generateWithAi(
   return parsed
 }
 
-const NARRATION_TRANSLATION_MODEL =  'google/gemma-4-31b-it:free' // 'google/gemini-3.1-flash-lite' 
+export const DEFAULT_NARRATION_TRANSLATION_MODEL = 'google/gemma-4-31b-it:free'
 
 const NARRATION_TRANSLATION_SCHEMA = {
   type: 'object',
@@ -347,6 +356,7 @@ const NARRATION_TRANSLATION_SCHEMA = {
 
 export async function translateNarrationCues(
   apiKey: string,
+  model: string,
   narrationText: string,
   cues: NarrationTranslationCueInput[],
 ): Promise<NarrationTranslationResult> {
@@ -366,7 +376,7 @@ export async function translateNarrationCues(
       'X-Title': 'Artful Learning Narration Translator',
     },
     body: JSON.stringify({
-      model: NARRATION_TRANSLATION_MODEL,
+      model,
       messages: [
         {
           role: 'system',

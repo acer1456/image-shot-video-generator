@@ -211,6 +211,21 @@ function AppInner() {
     triggerRedraw()
   }, [store, getPointFocusTime, drawTimelineTime, triggerRedraw])
 
+  const selectSubtitleAndSyncTimeline = useCallback((id: string | null) => {
+    setActiveSubtitleId(id)
+    const cue = id ? subtitleCues.find(c => c.id === id) : null
+    if (!cue) return
+    previewCancelRef.current = true
+    store.setIsPreviewing(false)
+    const t = cue.startTime
+    drawTimelineTime(t, store.showGuidesInPreview)
+    timelinePanelRef.current?.setTimeCursor(t)
+    timelinePanelRef.current?.revealTime(t)
+    currentTimeRef.current = t
+    setCurrentTime(t)
+    triggerRedraw()
+  }, [store, subtitleCues, drawTimelineTime, triggerRedraw])
+
   // ---------- Preview ----------
   const previewPath = useCallback(async () => {
     if (!store.image || !store.points.length || store.isRendering) return
@@ -594,7 +609,7 @@ function AppInner() {
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             activeSubtitleId={activeSubtitleId}
-            onActiveSubtitleIdChange={setActiveSubtitleId}
+            onActiveSubtitleIdChange={selectSubtitleAndSyncTimeline}
             inputText={narrationInputText}
             onInputTextChange={setNarrationInputText}
             image={store.image}
@@ -724,7 +739,7 @@ function AppInner() {
             onNarrationTrackChange={handleNarrationTrackChange}
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
-            onSubtitleSelect={setActiveSubtitleId}
+            onSubtitleSelect={selectSubtitleAndSyncTimeline}
             imageOverlays={imageOverlays}
             onImageOverlaysChange={handleImageOverlaysChange}
             overlaysLocked={overlaysLocked}
