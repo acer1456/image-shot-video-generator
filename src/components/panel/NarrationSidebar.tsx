@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, Camera,
-  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, RotateCcw, SlidersHorizontal,
+  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
+import { ModelCombobox } from '@/components/ModelCombobox'
 import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clampPauseIntensity, useheadTTS } from '@/hooks/useheadTTS'
-import {
-  DEFAULT_NARRATION_TRANSLATION_MODEL, fetchAllTranslationModels, translateNarrationCues,
-  type OpenRouterModelInfo,
-} from '@/lib/openrouter'
+import { DEFAULT_NARRATION_TRANSLATION_MODEL, translateNarrationCues } from '@/lib/openrouter'
 import {
   NarrationAIPanel,
   type NarrationAICameraResult,
@@ -130,9 +128,7 @@ export function NarrationSidebar({
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationError, setTranslationError] = useState('')
   const [translationModel, setTranslationModel] = useState(() => localStorage.getItem(LS_TRANSLATION_MODEL) || DEFAULT_NARRATION_TRANSLATION_MODEL)
-  const [translationModels, setTranslationModels] = useState<OpenRouterModelInfo[]>([])
-  const [loadingModels, setLoadingModels] = useState(false)
-  const [modelsError, setModelsError] = useState('')
+  const [translationModelName, setTranslationModelName] = useState(() => localStorage.getItem(LS_TRANSLATION_MODEL_NAME) ?? '')
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<{ trackId: string; url: string } | null>(null)
 
@@ -161,35 +157,18 @@ export function NarrationSidebar({
     if (track?.pauseIntensity != null) setPauseIntensity(clampPauseIntensity(track.pauseIntensity))
   }, [track?.pauseIntensity])
 
-  const loadFreeModels = useCallback(async () => {
-    const apiKey = localStorage.getItem('openrouter_api_key') ?? ''
-    if (!apiKey.trim()) {
-      setModelsError('請先在 AI 面板輸入 OpenRouter API Key')
-      return
-    }
-    setLoadingModels(true)
-    setModelsError('')
-    try {
-      const list = await fetchAllTranslationModels(apiKey.trim())
-      setTranslationModels(list)
-    } catch (error) {
-      setModelsError(error instanceof Error ? error.message : '載入模型列表失敗')
-    } finally {
-      setLoadingModels(false)
-    }
-  }, [])
+  useEffect(() => {
+    localStorage.setItem(LS_TRANSLATION_MODEL, translationModel)
+  }, [translationModel])
 
   useEffect(() => {
-    if (localStorage.getItem('openrouter_api_key')?.trim()) loadFreeModels()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (translationModelName) localStorage.setItem(LS_TRANSLATION_MODEL_NAME, translationModelName)
+  }, [translationModelName])
 
-  const selectTranslationModel = useCallback((id: string) => {
+  const selectTranslationModel = useCallback((id: string, name: string) => {
     setTranslationModel(id)
-    localStorage.setItem(LS_TRANSLATION_MODEL, id)
-    const match = translationModels.find(m => m.id === id)
-    if (match) localStorage.setItem(LS_TRANSLATION_MODEL_NAME, match.name)
-  }, [translationModels])
+    setTranslationModelName(name)
+  }, [])
 
   const handleGenerate = useCallback(async () => {
     const trimmed = inputText.trim()
@@ -532,26 +511,15 @@ export function NarrationSidebar({
           <>
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-2">
               <div className="flex items-center gap-1">
-                <select
-                  className="flex-1 min-w-0 text-xs rounded-md border border-input bg-background px-2 py-1.5 outline-none focus:ring-1 focus:ring-ring"
-                  value={translationModel}
-                  onChange={e => selectTranslationModel(e.target.value)}
-                >
-                  {!translationModels.some(m => m.id === translationModel) && (
-                    <option value={translationModel}>{translationModel}</option>
-                  )}
-                  {translationModels.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={loadFreeModels}
-                  title="載入模型列表"
-                  disabled={loadingModels}
-                  className="h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40"
-                >
-                  {loadingModels ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                </button>
+                <div className="flex-1 min-w-0">
+                  <ModelCombobox
+                    apiKey={localStorage.getItem('openrouter_api_key') ?? ''}
+                    selectedId={translationModel}
+                    selectedName={translationModelName}
+                    onSelect={selectTranslationModel}
+                    requireVision={false}
+                  />
+                </div>
                 <button
                   onClick={swapAllCueText}
                   title="對調全部英文與中文字幕"
@@ -572,8 +540,8 @@ export function NarrationSidebar({
                   : <Languages className="h-3.5 w-3.5 mr-1" />}
                 產生中文字幕
               </Button>
-              {(translationError || modelsError) && (
-                <p className="text-[10px] text-red-500 leading-snug">{translationError || modelsError}</p>
+              {translationError && (
+                <p className="text-[10px] text-red-500 leading-snug">{translationError}</p>
               )}
             </div>
 
