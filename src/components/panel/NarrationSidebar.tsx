@@ -9,7 +9,8 @@ import { Slider } from '@/components/ui/slider'
 import type { NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { clampPauseIntensity, useheadTTS } from '@/hooks/useheadTTS'
-import { translateNarrationCues } from '@/lib/openrouter'
+import { NARRATION_TRANSLATION_MODEL, translateNarrationCues } from '@/lib/openrouter'
+import { ModelCombobox } from '@/components/ModelCombobox'
 import {
   NarrationAIPanel,
   type NarrationAICameraResult,
@@ -17,6 +18,10 @@ import {
   type NarrationAIStoryResult,
 } from '@/components/panel/NarrationAIPanel'
 import { createNarrationMixdown, getNarrationDuration } from '@/lib/narration'
+
+const LS_KEY_API_KEY = 'openrouter_api_key'
+const LS_KEY_TRANSLATION_MODEL = 'narration_translation_model'
+const LS_KEY_TRANSLATION_MODEL_NAME = 'narration_translation_model_name'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -122,6 +127,20 @@ export function NarrationSidebar({
   const [aiPanelMode, setAiPanelMode] = useState<NarrationAIMode | null>(null)
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationError, setTranslationError] = useState('')
+  const apiKey = localStorage.getItem(LS_KEY_API_KEY) ?? ''
+  const [translationModel, setTranslationModel] = useState(
+    () => localStorage.getItem(LS_KEY_TRANSLATION_MODEL) || NARRATION_TRANSLATION_MODEL,
+  )
+  const [translationModelName, setTranslationModelName] = useState(
+    () => localStorage.getItem(LS_KEY_TRANSLATION_MODEL_NAME) ?? '',
+  )
+
+  useEffect(() => {
+    if (translationModel) localStorage.setItem(LS_KEY_TRANSLATION_MODEL, translationModel)
+  }, [translationModel])
+  useEffect(() => {
+    if (translationModelName) localStorage.setItem(LS_KEY_TRANSLATION_MODEL_NAME, translationModelName)
+  }, [translationModelName])
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<{ trackId: string; url: string } | null>(null)
 
@@ -269,7 +288,6 @@ export function NarrationSidebar({
 
   const handleTranslate = useCallback(async () => {
     if (isTranslating) return
-    const apiKey = localStorage.getItem('openrouter_api_key') ?? ''
     if (!apiKey.trim()) {
       setTranslationError('請先在 AI 面板輸入 OpenRouter API Key')
       return
@@ -289,6 +307,7 @@ export function NarrationSidebar({
           startTime: cue.startTime,
           duration: cue.duration,
         })),
+        translationModel || NARRATION_TRANSLATION_MODEL,
       )
       const translations = new Map(result.cues.map(cue => [cue.cueIndex, cue.translation]))
       onSubtitleCuesChange(subtitleCues.map((cue, index) => ({
@@ -300,7 +319,7 @@ export function NarrationSidebar({
     } finally {
       setIsTranslating(false)
     }
-  }, [inputText, isTranslating, onSubtitleCuesChange, subtitleCues, track])
+  }, [apiKey, inputText, isTranslating, onSubtitleCuesChange, subtitleCues, track, translationModel])
 
   let statusNode: React.ReactNode = null
   if (status.phase === 'loading') {
@@ -521,6 +540,13 @@ export function NarrationSidebar({
                 onChange={e => updateActiveCue({ translation: e.target.value })}
               />
               <div className="flex flex-col gap-1">
+                <ModelCombobox
+                  apiKey={apiKey}
+                  selectedId={translationModel}
+                  selectedName={translationModelName}
+                  onSelect={(id, name) => { setTranslationModel(id); setTranslationModelName(name) }}
+                  requireVision={false}
+                />
                 <Button
                   size="sm"
                   variant="outline"
