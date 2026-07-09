@@ -16,7 +16,7 @@ import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
@@ -55,6 +55,9 @@ function AppInner() {
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
   const [imageOverlays, setImageOverlays] = useState<ImageOverlay[]>([])
   const [overlaysLocked, setOverlaysLocked] = useState(false)
+  const [mosaicStrokes, setMosaicStrokes] = useState<MosaicStroke[]>([])
+  const [showMosaicInOutput, setShowMosaicInOutput] = useState(true)
+  const [isMosaicPaintMode, setIsMosaicPaintMode] = useState(false)
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
   const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
@@ -85,11 +88,15 @@ function AppInner() {
     subtitleCues,
     imageOverlays,
     overlaysLocked,
+    mosaicStrokes,
+    showMosaicInOutput,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
     setImageOverlays,
     setOverlaysLocked,
+    setMosaicStrokes,
+    setShowMosaicInOutput,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -98,11 +105,15 @@ function AppInner() {
     subtitleCues,
     imageOverlays,
     overlaysLocked,
+    mosaicStrokes,
+    showMosaicInOutput,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
     setImageOverlays,
     setOverlaysLocked,
+    setMosaicStrokes,
+    setShowMosaicInOutput,
     triggerRedraw,
   })
 
@@ -131,6 +142,8 @@ function AppInner() {
     narrationTrack,
     subtitleCues,
     imageOverlays,
+    mosaicStrokes,
+    showMosaic: showMosaicInOutput,
     showNarration: store.showNarrationInOutput,
     showCameraCaptions: store.showCameraCaptionsInOutput,
   })
@@ -169,6 +182,15 @@ function AppInner() {
     triggerRedraw()
   }, [triggerRedraw])
 
+  const handleMosaicStrokeChange = useCallback((stroke: MosaicStroke) => {
+    setMosaicStrokes(prev => {
+      const index = prev.findIndex(item => item.id === stroke.id)
+      if (index === -1) return [...prev, stroke]
+      return prev.map(item => item.id === stroke.id ? stroke : item)
+    })
+    triggerRedraw()
+  }, [triggerRedraw])
+
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
     const canvas = getCanvas()
     if (!canvas || !store.image) return
@@ -180,8 +202,8 @@ function AppInner() {
     const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
     const narrationText = getSubtitleRenderText(cue)
     const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false)
-  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays])
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false, mosaicStrokes, showMosaicInOutput)
+  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays, mosaicStrokes, showMosaicInOutput])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
     const { items } = buildTimeline(store.points)
@@ -570,6 +592,10 @@ function AppInner() {
     imageOverlays,
     overlaysLocked,
     onOverlayChange: handleOverlayChange,
+    mosaicStrokes,
+    showMosaic: showMosaicInOutput || isMosaicPaintMode,
+    isMosaicPaintMode,
+    onMosaicStrokeChange: handleMosaicStrokeChange,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
   return (
@@ -630,6 +656,8 @@ function AppInner() {
             showGuidesInPreview={store.showGuidesInPreview}
             showNarrationInOutput={store.showNarrationInOutput}
             showCameraCaptionsInOutput={store.showCameraCaptionsInOutput}
+            showMosaicInOutput={showMosaicInOutput}
+            isMosaicPaintMode={isMosaicPaintMode}
             onToggle={(key, val) => {
               if (key === 'showAllPoints') store.setShowAllPoints(val)
               else if (key === 'onlyActiveBox') store.setOnlyActiveBox(val)
@@ -640,8 +668,10 @@ function AppInner() {
                 if (!val) stopNarrationAudio(narrationSourcesRef)
               }
               else if (key === 'showCameraCaptionsInOutput') store.setShowCameraCaptionsInOutput(val)
+              else if (key === 'showMosaicInOutput') setShowMosaicInOutput(val)
               triggerRedraw()
             }}
+            onMosaicPaintModeChange={setIsMosaicPaintMode}
             safeAreaVisibility={store.safeAreaVisibility}
             onSafeAreaChange={(key, val) => { store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val }); triggerRedraw() }}
             canvasEditorProps={canvasEditorProps}

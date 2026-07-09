@@ -1,13 +1,14 @@
 import { useRef, useEffect, useCallback } from 'react'
-import type { CameraPoint, BackgroundSettings, ImageOverlay, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
+import type { CameraPoint, BackgroundSettings, ImageOverlay, MosaicStroke, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
 import { drawOverlays, findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
+import { getMosaickedImage } from '@/lib/mosaic'
 import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
 import {
   fitImageRect, getCameraForPoint, getViewBoxCanvas,
   drawCamera, drawCaptionSafeArea, getCaptionLayout, getAllCaptions,
-  imageToCanvasPoint, canvasToImageRatio, drawOutputBackground
+  imageToCanvasPoint, canvasToImageRatio
 } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
 
@@ -50,6 +51,10 @@ interface CanvasEditorProps {
   imageOverlays?: ImageOverlay[]
   overlaysLocked?: boolean
   onOverlayChange?: (id: string, patch: Partial<ImageOverlay>) => void
+  mosaicStrokes?: MosaicStroke[]
+  showMosaic?: boolean
+  isMosaicPaintMode?: boolean
+  onMosaicStrokeChange?: (stroke: MosaicStroke) => void
 }
 
 interface CaptionDragPreview {
@@ -72,11 +77,13 @@ export default function CanvasEditor({
   activeCaptionIndex = 0, onCaptionSelect,
   narrationText, subtitleStyle, onSubtitlePositionChange,
   imageOverlays = [], overlaysLocked = false, onOverlayChange,
+  mosaicStrokes = [], showMosaic = true, isMosaicPaintMode = false, onMosaicStrokeChange,
 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawBaseRef = useRef<(() => void) | null>(null)
   const captionDragPreviewRef = useRef<CaptionDragPreview | null>(null)
   const captionDragFrameRef = useRef<number | null>(null)
+  const mosaicStrokeRef = useRef<MosaicStroke | null>(null)
   const { resolvedTheme } = useTheme()
 
   const getCssVar = useCallback((name: string, fallback: string) => {
@@ -124,7 +131,7 @@ export default function CanvasEditor({
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
       const camera = getCameraForPoint(image, points[activeIndex])
       const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, currentTimeRef.current, !overlaysLocked)
+      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, currentTimeRef.current, !overlaysLocked, mosaicStrokes, showMosaic)
       if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
       return
     }
@@ -132,7 +139,8 @@ export default function CanvasEditor({
     const r = fitImageRect(canvas, image)
     ctx.fillStyle = canvasBg
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(image, r.x, r.y, r.w, r.h)
+    const imageSource = showMosaic && mosaicStrokes.length ? getMosaickedImage(image, mosaicStrokes) : image
+    ctx.drawImage(imageSource, r.x, r.y, r.w, r.h)
 
     if (showGuides) drawEditorGuides(canvas, ctx)
     // 疊加圖以輸出畫面座標繪製；編輯模式下顯示框線與縮放 handle（鎖定時只顯示不可拖）
@@ -142,7 +150,7 @@ export default function CanvasEditor({
         onImageLoad: scheduleOverlayRedraw,
       })
     }
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, overlaysLocked, currentTimeRef])
+  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
 
   const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
     const canvas = canvasRef.current
@@ -185,6 +193,11 @@ export default function CanvasEditor({
       preview.captionIndex,
       narrationText,
       subtitleStyle,
+      imageOverlays,
+      currentTimeRef.current,
+      false,
+      mosaicStrokes,
+      showMosaic,
     )
     if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
   }, [
@@ -199,6 +212,10 @@ export default function CanvasEditor({
     showCaptionBox,
     showGuidesInPreview,
     subtitleStyle,
+    imageOverlays,
+    currentTimeRef,
+    mosaicStrokes,
+    showMosaic,
   ])
 
   const scheduleCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
@@ -439,6 +456,20 @@ export default function CanvasEditor({
     target.setPointerCapture(event.pointerId)
     const pos = getCanvasPointer(event)
 
+    if (isMosaicPaintMode && onMosaicStrokeChange && canvasRef.current) {
+      const rect = fitImageRect(canvasRef.current, image)
+      if (pos.x < rect.x || pos.x > rect.x + rect.w || pos.y < rect.y || pos.y > rect.y + rect.h) return
+      const ratio = canvasToImageRatio(canvasRef.current, image, pos.x, pos.y)
+      const stroke: MosaicStroke = {
+        id: crypto.randomUUID(),
+        brushSize: Math.max(18, Math.round(image.width * 0.045)),
+        points: [ratio],
+      }
+      mosaicStrokeRef.current = stroke
+      onMosaicStrokeChange(stroke)
+      return
+    }
+
     // 疊加圖優先命中（未鎖定時）；鎖定後 canvas 完全不理會疊加圖
     if (!overlaysLocked && imageOverlays.length && onOverlayChange && canvasRef.current) {
       const hit = findOverlayHit(canvasRef.current, imageOverlays, currentTimeRef.current, pos.x, pos.y)
@@ -541,8 +572,24 @@ export default function CanvasEditor({
 
   const handlePointerMove = (event: React.PointerEvent) => {
     const canvas = canvasRef.current
-    if (!canvas || !image || !dragStateRef.current || isRendering) return
+    if (!canvas || !image || isRendering) return
     const pos = getCanvasPointer(event)
+
+    if (isMosaicPaintMode && mosaicStrokeRef.current && onMosaicStrokeChange) {
+      const rect = fitImageRect(canvas, image)
+      if (pos.x < rect.x || pos.x > rect.x + rect.w || pos.y < rect.y || pos.y > rect.y + rect.h) return
+      const ratio = canvasToImageRatio(canvas, image, pos.x, pos.y)
+      const current = mosaicStrokeRef.current
+      const last = current.points[current.points.length - 1]
+      if (!last || distance(ratio.x, ratio.y, last.x, last.y) >= 0.003) {
+        const next = { ...current, points: [...current.points, ratio] }
+        mosaicStrokeRef.current = next
+        onMosaicStrokeChange(next)
+      }
+      return
+    }
+
+    if (!dragStateRef.current) return
     const drag = dragStateRef.current
 
     if (drag.type === 'overlayMove' || drag.type === 'overlayResize') {
@@ -676,6 +723,7 @@ export default function CanvasEditor({
       onCaptionMove(preview.pointIndex, preview.captionIndex, preview.x, preview.y)
     }
     captionDragPreviewRef.current = null
+    mosaicStrokeRef.current = null
     dragStateRef.current = null
     setSnapGuide({ x: false, y: false })
     onDragEnd()
@@ -705,7 +753,7 @@ export default function CanvasEditor({
           maxWidth: '100%',
           aspectRatio: '9/16',
           display: 'block',
-          cursor: 'crosshair',
+          cursor: isMosaicPaintMode ? 'cell' : 'crosshair',
           borderRadius: '12px',
           border: '1px solid hsl(var(--border))',
         }}

@@ -1,5 +1,6 @@
-import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, MosaicStroke, SubtitleStyle } from '@/types'
 import { drawOverlays } from './overlays'
+import { getMosaickedImage } from './mosaic'
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
@@ -214,11 +215,14 @@ export function drawCamera(
   subtitleStyle?: SubtitleStyle,
   overlays?: ImageOverlay[],
   overlayTime?: number,
-  overlayGuides?: boolean
+  overlayGuides?: boolean,
+  mosaicStrokes?: MosaicStroke[],
+  showMosaic = true
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
   const src = getCameraSourceRect(image, p as CameraPoint)
+  const imageSource = showMosaic && mosaicStrokes?.length ? getMosaickedImage(image, mosaicStrokes) : image
   drawOutputBackground(canvas, ctx, image, bg)
   const ix = Math.max(0, src.sx)
   const iy = Math.max(0, src.sy)
@@ -231,7 +235,7 @@ export function drawCamera(
     const dy = ((iy - src.sy) / src.sh) * canvas.height
     const dw = (iw / src.sw) * canvas.width
     const dh = (ih / src.sh) * canvas.height
-    ctx.drawImage(image, ix, iy, iw, ih, dx, dy, dw, dh)
+    ctx.drawImage(imageSource, ix, iy, iw, ih, dx, dy, dw, dh)
   }
   if (overlays?.length && overlayTime != null) {
     drawOverlays(canvas, ctx, overlays, overlayTime, { guides: overlayGuides })
