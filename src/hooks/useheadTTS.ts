@@ -457,11 +457,10 @@ export function useheadTTS() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'HeadTTS 生成失敗'
       setStatus({ phase: 'error', message, progress: 0 })
-      // 出錯時 worker 狀態不可信，整組釋放；成功時保留實例供下次重用
-      releaseHeadTTS()
       throw error
     } finally {
       generatingRef.current = false
+      releaseHeadTTS()
     }
   }, [getHeadTTS, releaseHeadTTS])
 
