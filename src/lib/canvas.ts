@@ -115,15 +115,24 @@ export function fitImageRect(
   return { x: (canvas.width - w) / 2, y: (canvas.height - h) / 2, w, h, scale }
 }
 
-export function getCameraSourceRect(image: { width: number; height: number }, p: CameraPoint) {
+/**
+ * 取景範圍。輸出比例是「目標畫布」的性質，不是常數——4:5 或 1:1 的截圖
+ * 跟 9:16 的影片共用同一套取景邏輯，只是比例不同。ScreenDownload 當初就是
+ * 為了這個參數才自己複製了一份。
+ */
+export function getCameraSourceRect(
+  image: { width: number; height: number },
+  p: CameraPoint,
+  outputRatio: number = OUTPUT_RATIO,
+) {
   const naturalRatio = image.width / image.height
   let baseW: number, baseH: number
-  if (naturalRatio > OUTPUT_RATIO) {
+  if (naturalRatio > outputRatio) {
     baseW = image.width
-    baseH = baseW / OUTPUT_RATIO
+    baseH = baseW / outputRatio
   } else {
     baseH = image.height
-    baseW = baseH * OUTPUT_RATIO
+    baseW = baseH * outputRatio
   }
   const sw = baseW / p.zoom
   const sh = baseH / p.zoom
@@ -263,18 +272,6 @@ function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement
   return off
 }
 
-export function drawOutputBackground(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement | null,
-  bg: BackgroundSettings
-) {
-  ctx.fillStyle = bg.color || '#000000'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  if (!image || bg.mode !== 'blur') return
-  ctx.drawImage(getBlurredBackground(canvas, image, bg.blur || 0), 0, 0)
-}
-
 /**
  * 一格畫面 = 一串 layer。純函式：只讀 state 與 target，不碰 canvas、不碰 React。
  * 陣列順序就是繪製順序。
@@ -290,7 +287,7 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
   })
 
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
-  const src = getCameraSourceRect(image, p as CameraPoint)
+  const src = getCameraSourceRect(image, p as CameraPoint, target.width / target.height)
   const ix = Math.max(0, src.sx)
   const iy = Math.max(0, src.sy)
   const ix2 = Math.min(image.width, src.sx + src.sw)
@@ -670,28 +667,6 @@ function paintSubtitle(ctx: CanvasRenderingContext2D, layout: SubtitleLayout, st
   }
 
   ctx.restore()
-}
-
-export function drawNarrationSubtitle(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  style?: SubtitleStyle
-) {
-  if (!text) return
-  paintSubtitle(ctx, subtitleLayout(canvasTarget(ctx), text, style), style)
-}
-
-export function drawCaption(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  cap: CaptionData,
-  includeGuides: boolean,
-  snapGuide: { x: boolean; y: boolean }
-) {
-  const hasText = !!((cap.text || '').trim() || (cap.subtitle || '').trim())
-  if (!hasText && !includeGuides) return
-  paintCaption(ctx, cap, captionLayout(canvasTarget(ctx), cap), includeGuides, snapGuide)
 }
 
 function paintCaption(

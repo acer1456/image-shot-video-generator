@@ -14,7 +14,8 @@ import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
 import type { VideoRenderMethod } from '@/hooks/useVideoRender'
 import ScreenDownload from '@/components/ScreenDownload'
-import type { ActiveTab, BackgroundSettings, CameraPoint } from '@/types'
+import type { ActiveTab } from '@/types'
+import type { Scene } from '@/lib/canvas'
 
 
 interface AppToolbarProps {
@@ -24,9 +25,7 @@ interface AppToolbarProps {
   renderProgress: number
   hasImage: boolean
   hasPoints: boolean
-  image: HTMLImageElement | null
-  points: CameraPoint[]
-  backgroundSettings: BackgroundSettings
+  scene: Scene
   projectName: string
   activeTab: ActiveTab
   onTabChange: (tab: 'camera' | 'caption') => void
@@ -46,7 +45,7 @@ interface AppToolbarProps {
 
 export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
-  hasImage, hasPoints, image, points, backgroundSettings, projectName,
+  hasImage, hasPoints, scene, projectName,
   activeTab, onTabChange,
   fileInputRef, loadProjectInputRef,
   onProjectNameChange, onImageFile, onOverlayImageFile, onLoadFile,
@@ -164,9 +163,7 @@ export function AppToolbar({
         </Button>
 
         <ScreenDownload
-          image={image}
-          points={points}
-          backgroundSettings={backgroundSettings}
+          scene={scene}
           projectName={projectName}
           disabled={isDisabled || isRendering}
         />

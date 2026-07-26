@@ -316,4 +316,37 @@ function scene(over: Partial<Scene> = {}): Scene {
   assert.equal(sceneDuration(s), 7, '沒有圖片也還是有時間軸長度')
 }
 
+// 23. 輸出比例來自目標畫布，不是常數。ScreenDownload 的 4:5 / 1:1 靠這個，
+//     它當初就是為了這個參數才自己複製了一份取景邏輯。
+{
+  const square: Target = { width: 1080, height: 1080, measure }
+  const [, img] = layersFor(state(), square)
+  if (img.kind !== 'image') throw new Error('expected image layer')
+  // 4000×3000 放進 1:1：baseW = 4000、baseH = 4000 → 上下各裁掉 500
+  assertRect(img.src, { x: 0, y: 0, w: 4000, h: 3000 }, '1:1 取景')
+  assertRect(img.dest, { x: 0, y: 135, w: 1080, h: 810 })
+
+  const portrait45: Target = { width: 1080, height: 1350, measure }
+  const [, img45] = layersFor(state(), portrait45)
+  if (img45.kind !== 'image') throw new Error('expected image layer')
+  assertRect(img45.dest, { x: 0, y: 270, w: 1080, h: 810 }, '4:5 取景')
+
+  // 同一個 state 在不同比例下必須給出不同的目標矩形，否則就是又寫死了
+  const [, img916] = layersFor(state(), target)
+  if (img916.kind !== 'image') throw new Error('expected image layer')
+  assert.notEqual(img916.dest.y, img.dest.y, '9:16 與 1:1 的留白不該一樣')
+}
+
+// 24. 直式來源圖走另一個分支：以高度為基準，左右裁切
+{
+  const tall = state({ image: { width: 1000, height: 4000, source: null as never }, camera: { cx: 500, cy: 2000, zoom: 1 } })
+  const [, img] = layersFor(tall, target)
+  if (img.kind !== 'image') throw new Error('expected image layer')
+  // naturalRatio 0.25 < 0.5625 → baseH = 4000、baseW = 2250 → 比圖寬，左右夾住
+  assertRect(img.src, { x: 0, y: 0, w: 1000, h: 4000 }, '整張直式圖都取用')
+  assert.ok(img.dest.x > 0 && img.dest.w < 1080, '左右留白')
+  assert.equal(img.dest.y, 0)
+  assert.equal(img.dest.h, 1920, '高度滿版')
+}
+
 console.log('canvas layers self-check passed')

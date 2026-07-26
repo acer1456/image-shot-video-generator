@@ -630,9 +630,7 @@ function AppInner() {
         renderProgress={renderProgress}
         hasImage={!!store.image}
         hasPoints={!!store.points.length}
-        image={store.image}
-        points={store.points}
-        backgroundSettings={store.backgroundSettings}
+        scene={scene}
         projectName={store.projectName}
         activeTab={store.activeTab}
         onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
