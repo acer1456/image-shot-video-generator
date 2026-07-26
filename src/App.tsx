@@ -21,7 +21,8 @@ import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
-  getTimelineStateAt, buildTimeline,
+  getTimelineStateAt,
+  sceneDuration, timeOfPoint, type Scene,
 } from '@/lib/canvas'
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
@@ -132,15 +133,26 @@ function AppInner() {
     triggerRedraw,
   })
 
-  const totalDuration = useMemo(() => {
-    const { totalDuration: td } = buildTimeline(store.points)
-    const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + getNarrationDuration(narrationTrack) : 0
-    const subtitleEnd = store.showNarrationInOutput
-      ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
-      : 0
-    const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
-    return Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
-  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues, imageOverlays])
+  // 一份 Scene 描述整支影片。顯示與否已解析成資料，所以縮圖、時間軸長度、
+  // 之後的預覽都看到同一件事。見 CONTEXT.md 的 Scene。
+  const scene = useMemo<Scene>(() => ({
+    image: store.image ? { width: store.image.width, height: store.image.height, source: store.image } : null,
+    background: store.backgroundSettings,
+    points: store.points,
+    cues: store.showNarrationInOutput ? subtitleCues : [],
+    overlays: imageOverlays,
+    mosaic: showMosaicInOutput ? mosaicStrokes : [],
+    showCameraCaptions: store.showCameraCaptionsInOutput,
+    audioEnd: store.showNarrationInOutput && narrationTrack
+      ? narrationTrack.startTime + getNarrationDuration(narrationTrack)
+      : 0,
+  }), [
+    store.image, store.backgroundSettings, store.points, store.showNarrationInOutput,
+    store.showCameraCaptionsInOutput, subtitleCues, imageOverlays, mosaicStrokes,
+    showMosaicInOutput, narrationTrack,
+  ])
+
+  const totalDuration = useMemo(() => sceneDuration(scene), [scene])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -220,14 +232,10 @@ function AppInner() {
     doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false, mosaicStrokes, showMosaicInOutput)
   }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays, mosaicStrokes, showMosaicInOutput])
 
-  const getPointFocusTime = useCallback((pointIndex: number) => {
-    const { items } = buildTimeline(store.points)
-    const holdItem = items.find(item => item.pointIndex === pointIndex && item.type === 'hold')
-    if (holdItem) return holdItem.start
-    const moveItem = items.find(item => item.pointIndex === pointIndex && item.type === 'move')
-    if (moveItem) return moveItem.start
-    return 0
-  }, [store.points])
+  const getPointFocusTime = useCallback(
+    (pointIndex: number) => timeOfPoint(store.points, pointIndex),
+    [store.points],
+  )
 
   const selectPointAndSyncTimeline = useCallback((pointIndex: number) => {
     if (pointIndex < 0) {
@@ -698,7 +706,7 @@ function AppInner() {
             activeTab={store.activeTab}
             activePoint={activePoint}
             activeCaptionIndex={activeCaptionIndex}
-            image={store.image}
+            scene={scene}
             backgroundSettings={store.backgroundSettings}
             collapsed={isEditorSidebarCollapsed}
             onToggleCollapse={() => setIsEditorSidebarCollapsed(v => !v)}

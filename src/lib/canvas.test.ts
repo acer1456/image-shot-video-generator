@@ -4,7 +4,7 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { layersAt, layersFor, sceneDuration, subtitleLayout, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import { layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
 import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
@@ -276,6 +276,44 @@ function scene(over: Partial<Scene> = {}): Scene {
 // 19. 沒有鏡頭點就沒有畫面——composeFrame 靠這個維持「不動畫布」的舊行為
 {
   assert.deepEqual(layersAt(scene({ points: [] }), 0, target), [])
+}
+
+// 20. timeOfPoint：以點定址的呼叫端換算成時間——停留區段的開頭
+{
+  const points = [
+    point({ moveDuration: 1.2, holdDuration: 1.5 }),
+    point({ moveDuration: .8, holdDuration: 2 }),
+    point({ moveDuration: 1, holdDuration: 0 }),   // 沒有停留 → 用移動的開頭
+  ]
+  assert.equal(timeOfPoint(points, 0), 1.2)
+  assert.equal(timeOfPoint(points, 1), 1.2 + 1.5 + .8)
+  assert.equal(timeOfPoint(points, 2), 1.2 + 1.5 + .8 + 2, '沒有停留就落在移動起點')
+  assert.equal(timeOfPoint(points, 99), 0, '超出範圍回 0')
+}
+
+// 21. 縮圖：拿掉字幕／旁白／疊加圖，但馬賽克必須留著。
+//     舊的 drawPointThumbnail 只傳 17 個參數中的 9 個，馬賽克被預設值關掉了。
+{
+  const s = scene({
+    points: [point({ caption: caption({ text: 'caption' }) })],
+    cues: [cue({ startTime: 0, duration: 99 })],
+    overlays: [overlay()],
+    mosaic: [stroke],
+  })
+  // drawPointThumbnail 內部就是這個轉換
+  const bare: Scene = { ...s, cues: [], overlays: [], showCameraCaptions: false }
+  const layers = layersAt(bare, timeOfPoint(bare.points, 0), target)
+  assert.deepEqual(kinds(layers), ['background', 'image'], '縮圖只有背景與影像')
+  const img = layers[1]
+  if (img.kind !== 'image') throw new Error('expected image layer')
+  assert.deepEqual(img.mosaic, [stroke], '馬賽克不能被縮圖丟掉')
+}
+
+// 22. Scene 沒有圖片時畫不出任何東西，但長度照算
+{
+  const s = scene({ image: null, cues: [cue({ startTime: 0, duration: 7 })] })
+  assert.deepEqual(layersAt(s, 1, target), [])
+  assert.equal(sceneDuration(s), 7, '沒有圖片也還是有時間軸長度')
 }
 
 console.log('canvas layers self-check passed')

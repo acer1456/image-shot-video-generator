@@ -440,7 +440,8 @@ export function drawCamera(
 // 見 CONTEXT.md 的 Scene。
 
 export interface Scene {
-  image: SourceImage
+  /** 尚未載入圖片的專案也是合法的 Scene——只是畫不出畫面。 */
+  image: SourceImage | null
   background: BackgroundSettings
   points: CameraPoint[]
   /** 空陣列＝不顯示旁白字幕 */
@@ -468,6 +469,18 @@ export function sceneDuration(scene: Scene): number {
   return Math.max(totalDuration, cueEnd, overlayEnd, scene.audioEnd)
 }
 
+/**
+ * 鏡頭點 index 對應的時間點——停留區段的開頭，沒有停留就用移動的開頭。
+ * 以點為單位思考的呼叫端（縮圖、時間軸選取）用它換成時間，畫面一律以時間定址。
+ */
+export function timeOfPoint(points: CameraPoint[], index: number): number {
+  const { items } = buildTimeline(points)
+  const hold = items.find(item => item.pointIndex === index && item.type === 'hold')
+  if (hold) return hold.start
+  const move = items.find(item => item.pointIndex === index && item.type === 'move')
+  return move ? move.start : 0
+}
+
 export function getActiveSubtitleCue(cues: SubtitleCue[], time: number): SubtitleCue | null {
   return cues.find(cue => time >= cue.startTime && time < cue.startTime + cue.duration) ?? null
 }
@@ -482,12 +495,14 @@ export function getSubtitleRenderText(cue: SubtitleCue | null): string {
 
 /** 把 Scene 在時間 t 解成一格畫面。沒有鏡頭點時回傳 null。 */
 export function frameStateAt(scene: Scene, t: number, chrome?: FrameState['chrome']): FrameState | null {
-  const timeline = getTimelineStateAt(scene.image, scene.points, t)
+  const image = scene.image
+  if (!image) return null
+  const timeline = getTimelineStateAt(image, scene.points, t)
   if (!timeline) return null
   const cue = getActiveSubtitleCue(scene.cues, t)
   const text = getSubtitleRenderText(cue)
   return {
-    image: scene.image,
+    image,
     background: scene.background,
     camera: timeline.camera,
     captions: scene.showCameraCaptions ? getAllCaptions(timeline.captionPoint) : [],
@@ -957,14 +972,12 @@ function drawPlatformPreviewTikTok(canvas: HTMLCanvasElement, ctx: CanvasRenderi
  * 在指定 canvas 上繪製指定鏡頭的 9:16 縮圖（不含字幕、不含 guide）。
  * 呼叫前需確保 canvas.width / canvas.height 已設定為目標像素尺寸。
  */
-export function drawPointThumbnail(
-  canvas: HTMLCanvasElement,
-  image: HTMLImageElement,
-  point: CameraPoint,
-  bg: BackgroundSettings
-) {
+export function drawPointThumbnail(canvas: HTMLCanvasElement, scene: Scene, pointIndex: number) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const camera = getCameraForPoint(image, point)
-  drawCamera(canvas, ctx, image, camera, bg, null, false, false, { x: false, y: false })
+  // 縮圖只呈現鏡頭取景，所以拿掉字幕、旁白與疊加圖——但馬賽克留著，
+  // 它是「圖片內容」而不是疊加物。之前縮圖只傳 17 個參數中的 9 個，
+  // 馬賽克就這樣被預設值悄悄關掉了。
+  const bare: Scene = { ...scene, cues: [], overlays: [], showCameraCaptions: false }
+  composeFrame(bare, timeOfPoint(bare.points, pointIndex), ctx)
 }
