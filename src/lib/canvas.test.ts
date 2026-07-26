@@ -4,7 +4,7 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { drawChrome, frameStateAt, layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import { drawChrome, frameStateAt, layersAt, layersFor, sceneDuration, sourceLayersAt, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
 import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
@@ -401,6 +401,48 @@ function scene(over: Partial<Scene> = {}): Scene {
   assert.equal(idxAt(3.5), 1)
   assert.equal(idxAt(99), 1, '超過長度後停在最後一點')
   assert.equal(frameStateAt(scene({ image: null }), 0), null, '沒有圖片就沒有畫面')
+}
+
+// 26. 原圖檢視：整張圖等比置中，沒有鏡頭取景、沒有字幕、沒有旁白，
+//     但馬賽克與疊加圖照舊。
+{
+  const s = scene({
+    points: [point({ caption: caption({ text: 'caption' }) })],
+    cues: [cue({ startTime: 0, duration: 99 })],
+    overlays: [overlay({ startTime: 0, duration: 99 })],
+    mosaic: [stroke],
+  })
+  const layers = sourceLayersAt(s, 1, target, '#123456')
+  assert.deepEqual(kinds(layers), ['background', 'image', 'overlay'], '沒有字幕也沒有旁白')
+
+  const bg = layers[0]
+  if (bg.kind !== 'background') throw new Error('expected background')
+  assert.equal(bg.color, '#123456', '底色跟隨主題，不是 scene.background')
+  assert.equal(bg.blur, null, '原圖檢視不用模糊背景')
+
+  const img = layers[1]
+  if (img.kind !== 'image') throw new Error('expected image')
+  assertRect(img.src, { x: 0, y: 0, w: 4000, h: 3000 }, '整張圖')
+  // 4000×3000 塞進 1080×1920：scale = 1080/4000 = 0.27 → 1080×810，垂直置中
+  assertRect(img.dest, { x: 0, y: (1920 - 810) / 2, w: 1080, h: 810 })
+  assert.deepEqual(img.mosaic, [stroke], '馬賽克在原圖檢視也要套用')
+}
+
+// 27. 原圖檢視也依時間過濾疊加圖，沒有圖片時只留底色
+{
+  const s = scene({ overlays: [overlay({ startTime: 5, duration: 2 })] })
+  assert.deepEqual(kinds(sourceLayersAt(s, 1, target, '#000')), ['background', 'image'], '不在時間內')
+  assert.deepEqual(kinds(sourceLayersAt(s, 6, target, '#000')), ['background', 'image', 'overlay'])
+  assert.deepEqual(kinds(sourceLayersAt(scene({ image: null }), 0, target, '#000')), ['background'])
+}
+
+// 28. 沒有鏡頭點時，疊加圖把手仍然要畫得出來——相機分頁在加第一個點之前
+//     就會用到，走 layersAt 的話會整個消失
+{
+  const s = scene({ points: [], overlays: [overlay({ startTime: 0, duration: 99 })] })
+  const { ctx, calls } = recordingCtx(1080, 1920)
+  drawChrome(s, 1, ctx, { activeCaptionIndex: 0, captionBox: false, snapGuide: { x: false, y: false }, overlayGuides: true })
+  assert.equal(calls.filter(c => c.name === 'strokeRect').length, 1, '疊加圖框線不該依賴鏡頭點')
 }
 
 console.log('canvas layers self-check passed')

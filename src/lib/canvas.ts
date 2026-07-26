@@ -276,6 +276,18 @@ function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement
   return off
 }
 
+/** 疊加圖以輸出畫面座標定位，兩種投影共用同一份幾何。 */
+function overlayLayer(overlay: ImageOverlay, target: Target): Extract<Layer, { kind: 'overlay' }> {
+  const w = overlay.scale * target.width
+  const h = w * (target.overlayRatio ?? (() => 1))(overlay)
+  return {
+    kind: 'overlay',
+    overlay,
+    rect: { x: overlay.x * target.width - w / 2, y: overlay.y * target.height - h / 2, w, h },
+    opacity: clamp(overlay.opacity, 0, 1),
+  }
+}
+
 /**
  * 一格畫面 = 一串 layer。純函式：只讀 state 與 target，不碰 canvas、不碰 React。
  * 陣列順序就是繪製順序。
@@ -313,22 +325,7 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
     })
   }
 
-  const ratioOf = target.overlayRatio ?? (() => 1)
-  for (const overlay of state.overlays) {
-    const w = overlay.scale * target.width
-    const h = w * ratioOf(overlay)
-    layers.push({
-      kind: 'overlay',
-      overlay,
-      rect: {
-        x: overlay.x * target.width - w / 2,
-        y: overlay.y * target.height - h / 2,
-        w,
-        h,
-      },
-      opacity: clamp(overlay.opacity, 0, 1),
-    })
-  }
+  for (const overlay of state.overlays) layers.push(overlayLayer(overlay, target))
 
   state.captions.forEach((cap, i) => {
     layers.push({
@@ -351,7 +348,7 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
 }
 
 /** 把 layer 依序塗上去。所有幾何都已算好，這裡只做 canvas 呼叫。 */
-export function paint(layers: Layer[], ctx: CanvasRenderingContext2D) {
+export function paint(layers: Layer[], ctx: CanvasRenderingContext2D, onOverlayLoad?: () => void) {
   const canvas = ctx.canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   for (const layer of layers) {
@@ -373,7 +370,7 @@ export function paint(layers: Layer[], ctx: CanvasRenderingContext2D) {
         break
       }
       case 'overlay': {
-        const img = getOverlayImage(layer.overlay)
+        const img = getOverlayImage(layer.overlay, onOverlayLoad)
         if (img) {
           ctx.save()
           ctx.globalAlpha = layer.opacity
@@ -493,23 +490,66 @@ export function composeFrame(
 }
 
 /**
+ * 原圖檢視：整張圖等比縮放置中，不做鏡頭取景、不畫字幕與旁白。
+ * 相機分頁在編輯鏡頭位置時看的就是這個投影——同一個 Scene，不同的畫法。
+ * 見 CONTEXT.md 的 Source view。
+ */
+export function sourceLayersAt(scene: Scene, t: number, target: Target, background: string): Layer[] {
+  const layers: Layer[] = [{ kind: 'background', color: background, blur: null }]
+  const image = scene.image
+  if (!image) return layers
+
+  const scale = Math.min(target.width / image.width, target.height / image.height)
+  const w = image.width * scale
+  const h = image.height * scale
+  layers.push({
+    kind: 'image',
+    image,
+    src: { x: 0, y: 0, w: image.width, h: image.height },
+    dest: { x: (target.width - w) / 2, y: (target.height - h) / 2, w, h },
+    mosaic: scene.mosaic,
+  })
+
+  for (const overlay of scene.overlays) {
+    if (isOverlayActiveAt(overlay, t)) layers.push(overlayLayer(overlay, target))
+  }
+  return layers
+}
+
+export function composeSourceView(
+  scene: Scene,
+  t: number,
+  ctx: CanvasRenderingContext2D,
+  background: string,
+  onOverlayLoad?: () => void,
+) {
+  paint(sourceLayersAt(scene, t, canvasTarget(ctx, getOverlayRatio), background), ctx, onOverlayLoad)
+}
+
+/**
  * 在已經畫好的畫面上疊編輯標記。跟 composeFrame 走同一組 layer，
  * 所以框線位置不可能跟畫出來的字幕對不上。匯出路徑不呼叫這支。
  */
 export function drawChrome(scene: Scene, t: number, ctx: CanvasRenderingContext2D, chrome: Chrome) {
-  const layers = layersAt(scene, t, canvasTarget(ctx, getOverlayRatio))
+  const target = canvasTarget(ctx, getOverlayRatio)
+
+  // 疊加圖的位置與鏡頭無關（以輸出畫面座標定位），所以兩種投影都適用，
+  // 而且沒有鏡頭點時照樣要畫得出把手
   if (chrome.overlayGuides) {
-    for (const layer of layers) {
-      if (layer.kind === 'overlay') paintOverlayGuides(ctx, layer.rect)
+    for (const overlay of scene.overlays) {
+      if (isOverlayActiveAt(overlay, t)) paintOverlayGuides(ctx, overlayLayer(overlay, target).rect)
     }
   }
+
+  // 字幕框只在鏡頭取景的投影下有意義，而且要跟畫出來的字幕用同一組 layer
   if (chrome.captionBox) {
-    for (const layer of layers) {
+    for (const layer of layersAt(scene, t, target)) {
       if (layer.kind === 'caption' && layer.captionIndex === chrome.activeCaptionIndex) {
         paintCaptionGuides(ctx, layer.layout, chrome.snapGuide)
       }
     }
   }
+
   if (chrome.safeArea) drawCaptionSafeArea(ctx.canvas, ctx, chrome.safeArea)
 }
 

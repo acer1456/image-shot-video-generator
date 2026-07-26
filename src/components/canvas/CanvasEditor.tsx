@@ -1,13 +1,12 @@
 import { useRef, useEffect, useCallback } from 'react'
 import type { CameraPoint, BackgroundSettings, ImageOverlay, MosaicStroke, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
-import { drawOverlays, findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
-import { getMosaickedImage } from '@/lib/mosaic'
+import { findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
 import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
 import {
   fitImageRect, getViewBoxCanvas, getCameraSourceRect,
-  composeFrame, drawChrome, timeOfPoint, drawCaptionSafeArea,
+  composeFrame, composeSourceView, drawChrome, timeOfPoint, drawCaptionSafeArea,
   getCaptionLayout, getAllCaptions,
   imageToCanvasPoint, canvasToImageRatio, type Scene
 } from '@/lib/canvas'
@@ -151,19 +150,19 @@ export default function CanvasEditor({
       return
     }
 
-    const r = fitImageRect(canvas, image)
-    ctx.fillStyle = canvasBg
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    const imageSource = showMosaic && mosaicStrokes.length ? getMosaickedImage(image, mosaicStrokes) : image
-    ctx.drawImage(imageSource, r.x, r.y, r.w, r.h)
-
-    if (showGuides) drawEditorGuides(canvas, ctx)
-    // 疊加圖以輸出畫面座標繪製；編輯模式下顯示框線與縮放 handle（鎖定時只顯示不可拖）
-    if (imageOverlays.length) {
-      drawOverlays(canvas, ctx, imageOverlays, currentTimeRef.current, {
-        guides: showGuides && !overlaysLocked,
-        onImageLoad: scheduleOverlayRedraw,
-      })
+    // 相機分頁看的是原圖檢視：同一個 Scene，只是換一種投影
+    composeSourceView(scene, currentTimeRef.current, ctx, canvasBg, scheduleOverlayRedraw)
+    if (showGuides) {
+      drawEditorGuides(canvas, ctx)
+      // 疊加圖框線與縮放 handle（鎖定時只顯示不可拖）
+      if (!overlaysLocked) {
+        drawChrome(scene, currentTimeRef.current, ctx, {
+          activeCaptionIndex: 0,
+          captionBox: false,
+          snapGuide: { x: false, y: false },
+          overlayGuides: true,
+        })
+      }
     }
   }, [scene, image, points, activeIndex, activeTab, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
 
