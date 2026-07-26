@@ -2,16 +2,14 @@ import { useCallback, useState } from 'react'
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer'
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer'
 import type { AppStore } from '@/hooks/useAppStore'
-import { buildTimeline, drawCamera as doDrawCamera, getTimelineStateAt } from '@/lib/canvas'
+import { composeFrame, convertScene, sceneDuration } from '@/lib/canvas'
 import { OUTPUT_W, OUTPUT_H, sanitizeFileName, getTodayString, wait } from '@/lib/utils'
-import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from '@/lib/chinese'
+import { type ChineseConversion } from '@/lib/chinese'
 import type { ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
 import {
   createNarrationMixdown,
-  getActiveSubtitleCue,
   getNarrationDuration,
   getNarrationSampleRate,
-  getSubtitleRenderText,
   hasNarrationAudio,
 } from '@/lib/narration'
 
@@ -98,20 +96,21 @@ export function useVideoRender({
     store.setIsRendering(true)
     store.setIsPreviewing(false)
     try {
-      const renderPoints = captionConversion === 'original'
-        ? store.points
-        : await convertPointsCaptions(store.points, captionConversion)
-      const renderSubtitleCues = !showNarration
-        ? []
-        : captionConversion === 'original'
-        ? subtitleCues
-        : await convertSubtitleCues(subtitleCues, captionConversion)
-      const { totalDuration: td } = buildTimeline(renderPoints)
       const renderNarrationTrack = showNarration ? narrationTrack : null
-      const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + getNarrationDuration(renderNarrationTrack) : 0
-      const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
-      const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
-      const renderDuration = Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
+      // 一個 Scene 描述整支影片；預覽與匯出的唯一差別就是下面這行繁簡轉換。
+      const scene = await convertScene({
+        image: { width: store.image.width, height: store.image.height, source: store.image },
+        background: store.backgroundSettings,
+        points: store.points,
+        cues: showNarration ? subtitleCues : [],
+        overlays: imageOverlays,
+        mosaic: showMosaic ? mosaicStrokes : [],
+        showCameraCaptions,
+        audioEnd: renderNarrationTrack
+          ? renderNarrationTrack.startTime + getNarrationDuration(renderNarrationTrack)
+          : 0,
+      }, captionConversion)
+      const renderDuration = sceneDuration(scene)
       const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
 
       // Dedicated offscreen canvas — completely isolated from the editor canvas.
@@ -131,15 +130,9 @@ export function useVideoRender({
       const editorCtx = editorCanvas?.getContext('2d') ?? null
 
       const drawFrame = (t: number) => {
-        const state = getTimelineStateAt(store.image!, renderPoints, t)
-        if (!state) return
-        const cue = getActiveSubtitleCue(renderSubtitleCues, t)
-        const narText = getSubtitleRenderText(cue) || undefined
-        const captionPoint = showCameraCaptions ? state.captionPoint : null
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false, mosaicStrokes, showMosaic)
-        if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false, mosaicStrokes, showMosaic)
-        }
+        // 沒有 chrome 參數 → 匯出畫面畫不出輔助線，不是靠記得傳 false
+        composeFrame(scene, t, offCtx)
+        if (editorCtx) composeFrame(scene, t, editorCtx)
       }
 
       setRenderProgress(0)

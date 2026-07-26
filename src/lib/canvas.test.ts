@@ -4,8 +4,8 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { layersFor, subtitleLayout, type FrameState, type Layer, type Target } from './canvas'
-import type { CaptionData, ImageOverlay, MosaicStroke } from '@/types'
+import { layersAt, layersFor, sceneDuration, subtitleLayout, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
 const measure: Target['measure'] = (text) => text.length * 10
@@ -192,6 +192,90 @@ function assertRect(actual: { x: number; y: number; w: number; h: number }, expe
 {
   const layers = layersFor(state({ overlays: [overlay({ id: 'a' }), overlay({ id: 'b' })] }), target)
   assert.equal(layers.filter(l => l.kind === 'overlay').length, 2)
+}
+
+// ─── Scene 層級：時間解析與長度 ─────────────────────────────────────────
+
+function cue(over: Partial<SubtitleCue> = {}): SubtitleCue {
+  return {
+    id: 'c1', narrationId: 'n1', text: 'hello', translation: '',
+    startTime: 0, duration: 2, style: {} as SubtitleStyle,
+    wordStartIndex: 0, wordEndIndex: 1,
+    ...over,
+  }
+}
+
+function point(over: Partial<CameraPoint> = {}): CameraPoint {
+  return { x: .5, y: .5, zoom: 1, move: 'slide', moveDuration: 1, holdDuration: 2, caption: caption(), ...over }
+}
+
+function scene(over: Partial<Scene> = {}): Scene {
+  return {
+    image: { width: 4000, height: 3000, source: null as never },
+    background: { mode: 'color', color: '#000000', blur: 0 },
+    points: [point()],
+    cues: [],
+    overlays: [],
+    mosaic: [],
+    showCameraCaptions: true,
+    audioEnd: 0,
+    ...over,
+  }
+}
+
+// 14. 影片長度取四者最長：鏡頭路徑 / 旁白字幕 / 疊加圖 / 音訊
+{
+  // 一個 point：moveDuration 1 + holdDuration 2 = 3
+  assert.equal(sceneDuration(scene()), 3, '只有鏡頭路徑')
+  assert.equal(sceneDuration(scene({ cues: [cue({ startTime: 8, duration: 2 })] })), 10, '字幕比較長')
+  assert.equal(sceneDuration(scene({ overlays: [overlay({ startTime: 20, duration: 5 })] })), 25, '疊加圖比較長')
+  assert.equal(sceneDuration(scene({ audioEnd: 42 })), 42, '旁白音訊比較長')
+  assert.equal(
+    sceneDuration(scene({ cues: [cue({ startTime: 8, duration: 2 })], overlays: [overlay({ startTime: 1, duration: 1 })], audioEnd: 6 })),
+    10,
+    '取最長的那個',
+  )
+}
+
+// 15. layersAt 解出時間：hold 區間內用該點的鏡頭與字幕
+{
+  const s = scene({ points: [point({ caption: caption({ text: 'first' }) }), point({ caption: caption({ text: 'second' }) })] })
+  const at1 = layersAt(s, 1.5, target)   // 第一點的 hold
+  const at5 = layersAt(s, 5, target)     // 第二點的 hold
+  const textOf = (ls: Layer[]) => ls.filter(l => l.kind === 'caption').map(l => l.kind === 'caption' ? l.cap.text : '')
+  assert.deepEqual(textOf(at1), ['first'])
+  assert.deepEqual(textOf(at5), ['second'])
+}
+
+// 16. showCameraCaptions=false → 完全沒有 caption layer
+{
+  const s = scene({ points: [point({ caption: caption({ text: 'hidden me' }) })], showCameraCaptions: false })
+  assert.equal(layersAt(s, 1.5, target).filter(l => l.kind === 'caption').length, 0)
+}
+
+// 17. 疊加圖依時間過濾
+{
+  const s = scene({ overlays: [overlay({ id: 'a', startTime: 0, duration: 1 }), overlay({ id: 'b', startTime: 5, duration: 5 })] })
+  const idsAt = (t: number) => layersAt(s, t, target).flatMap(l => l.kind === 'overlay' ? [l.overlay.id] : [])
+  assert.deepEqual(idsAt(0.5), ['a'])
+  assert.deepEqual(idsAt(6), ['b'])
+  assert.deepEqual(idsAt(3), [], '兩個都不在時間內')
+}
+
+// 18. 旁白字幕只在該 cue 的時間內出現，主文＋譯文以換行合併
+{
+  const s = scene({ cues: [cue({ startTime: 1, duration: 2, text: 'Hello', translation: '你好' })] })
+  const subAt = (t: number) => layersAt(s, t, target).find(l => l.kind === 'subtitle')
+  assert.equal(subAt(0.5), undefined, 'cue 還沒開始')
+  assert.equal(subAt(3.5), undefined, 'cue 已結束')
+  const shown = subAt(2)
+  if (shown?.kind !== 'subtitle') throw new Error('expected subtitle layer')
+  assert.equal(shown.layout.lines.length, 2, '主文與譯文各一行')
+}
+
+// 19. 沒有鏡頭點就沒有畫面——composeFrame 靠這個維持「不動畫布」的舊行為
+{
+  assert.deepEqual(layersAt(scene({ points: [] }), 0, target), [])
 }
 
 console.log('canvas layers self-check passed')

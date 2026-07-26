@@ -1,4 +1,5 @@
-import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, MosaicStroke, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
+import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from './chinese'
 import { getOverlayImage, getOverlayRatio, isOverlayActiveAt, paintOverlayGuides } from './overlays'
 import { getMosaickedImage } from './mosaic'
 import {
@@ -152,7 +153,7 @@ export function canvasToImageRatio(
   }
 }
 
-export function getCameraForPoint(image: HTMLImageElement, p: CameraPoint): Camera {
+export function getCameraForPoint(image: { width: number; height: number }, p: CameraPoint): Camera {
   return { cx: p.x * image.width, cy: p.y * image.height, zoom: p.zoom }
 }
 
@@ -434,6 +435,96 @@ export function drawCamera(
   paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
 }
 
+// ─── Scene：一支影片的完整內容，與時間無關 ───────────────────────────────
+// 顯示與否已經解析成資料：旁白字幕隱藏就是 cues 為空、馬賽克關閉就是 mosaic 為空。
+// 見 CONTEXT.md 的 Scene。
+
+export interface Scene {
+  image: SourceImage
+  background: BackgroundSettings
+  points: CameraPoint[]
+  /** 空陣列＝不顯示旁白字幕 */
+  cues: SubtitleCue[]
+  overlays: ImageOverlay[]
+  /** 空陣列＝不套用馬賽克 */
+  mosaic: MosaicStroke[]
+  /**
+   * 鏡頭字幕是掛在 points 上的，沒辦法像 cues 那樣用空陣列表示隱藏，
+   * 所以這裡留一個必填欄位——必填就不可能忘記給。
+   */
+  showCameraCaptions: boolean
+  /** 音訊結束時間（秒）。影片不能比旁白短，所以它參與長度計算。 */
+  audioEnd: number
+}
+
+/**
+ * 影片長度：鏡頭路徑、旁白字幕、疊加圖、旁白音訊四者取最長。
+ * 這個公式原本在 App.tsx 與 useVideoRender.ts 各有一份。
+ */
+export function sceneDuration(scene: Scene): number {
+  const { totalDuration } = buildTimeline(scene.points)
+  const cueEnd = scene.cues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
+  const overlayEnd = scene.overlays.reduce((max, o) => Math.max(max, o.startTime + o.duration), 0)
+  return Math.max(totalDuration, cueEnd, overlayEnd, scene.audioEnd)
+}
+
+export function getActiveSubtitleCue(cues: SubtitleCue[], time: number): SubtitleCue | null {
+  return cues.find(cue => time >= cue.startTime && time < cue.startTime + cue.duration) ?? null
+}
+
+export function getSubtitleRenderText(cue: SubtitleCue | null): string {
+  if (!cue) return ''
+  const main = cue.text.trim()
+  const sub = cue.translation.trim()
+  if (main && sub) return `${main}\n${sub}`
+  return main || sub
+}
+
+/** 把 Scene 在時間 t 解成一格畫面。沒有鏡頭點時回傳 null。 */
+export function frameStateAt(scene: Scene, t: number, chrome?: FrameState['chrome']): FrameState | null {
+  const timeline = getTimelineStateAt(scene.image, scene.points, t)
+  if (!timeline) return null
+  const cue = getActiveSubtitleCue(scene.cues, t)
+  const text = getSubtitleRenderText(cue)
+  return {
+    image: scene.image,
+    background: scene.background,
+    camera: timeline.camera,
+    captions: scene.showCameraCaptions ? getAllCaptions(timeline.captionPoint) : [],
+    overlays: scene.overlays.filter(o => isOverlayActiveAt(o, t)),
+    mosaic: scene.mosaic,
+    subtitle: text ? { text, style: cue?.style } : null,
+    chrome,
+  }
+}
+
+export function layersAt(scene: Scene, t: number, target: Target, chrome?: FrameState['chrome']): Layer[] {
+  const state = frameStateAt(scene, t, chrome)
+  return state ? layersFor(state, target) : []
+}
+
+/** 匯出／預覽都走這一支。沒有鏡頭點時不動畫布，維持原本 drawFrame 的行為。 */
+export function composeFrame(
+  scene: Scene,
+  t: number,
+  ctx: CanvasRenderingContext2D,
+  chrome?: FrameState['chrome'],
+) {
+  const state = frameStateAt(scene, t, chrome)
+  if (!state) return
+  paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
+}
+
+/** 匯出時才做的繁簡轉換：Scene 進、Scene 出，所以預覽與匯出的差別就是這一行。 */
+export async function convertScene(scene: Scene, mode: ChineseConversion): Promise<Scene> {
+  if (mode === 'original') return scene
+  const [points, cues] = await Promise.all([
+    convertPointsCaptions(scene.points, mode),
+    convertSubtitleCues(scene.cues, mode),
+  ])
+  return { ...scene, points, cues }
+}
+
 /**
  * Greedily wraps words into lines that each fit within maxWidth.
  * No text deformation or font-size changes — lines simply break at word boundaries.
@@ -700,7 +791,7 @@ function drawSnapGuides(
 }
 
 export function getTimelineStateAt(
-  image: HTMLImageElement,
+  image: { width: number; height: number },
   points: CameraPoint[],
   time: number
 ): { pointIndex: number; camera: Camera; captionPoint: CameraPoint } | null {

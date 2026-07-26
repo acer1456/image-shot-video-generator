@@ -208,17 +208,9 @@ export function shiftSubtitleCues(
   return { cues: cues.map(cue => ({ ...cue, startTime: cue.startTime + applied })), applied }
 }
 
-export function getActiveSubtitleCue(cues: SubtitleCue[], time: number): SubtitleCue | null {
-  return cues.find(cue => time >= cue.startTime && time < cue.startTime + cue.duration) ?? null
-}
-
-export function getSubtitleRenderText(cue: SubtitleCue | null): string {
-  if (!cue) return ''
-  const main = cue.text.trim()
-  const sub = cue.translation.trim()
-  if (main && sub) return `${main}\n${sub}`
-  return main || sub
-}
+// 這兩支是「t 時刻該顯示哪一則字幕、算出來的文字長什麼樣」——屬於畫面組成，
+// 已移到 canvas.ts 與 layersAt 同住。這裡轉出去，維持既有 import 路徑。
+export { getActiveSubtitleCue, getSubtitleRenderText } from './canvas'
 
 export function getNarrationSampleRate(track: NarrationTrack | null): number | null {
   if (!track) return null
