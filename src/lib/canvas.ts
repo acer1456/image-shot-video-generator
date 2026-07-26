@@ -1,14 +1,84 @@
 import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, MosaicStroke, SubtitleStyle } from '@/types'
-import { drawOverlays } from './overlays'
+import { getOverlayImage, getOverlayRatio, isOverlayActiveAt, paintOverlayGuides } from './overlays'
 import { getMosaickedImage } from './mosaic'
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
-  wrapText
+  wrapText, canvasMeasure, type Measure
 } from './utils'
+
+export type { Measure }
 
 export interface FitRect {
   x: number; y: number; w: number; h: number; scale: number
+}
+
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/** 來源圖：排版只需要尺寸，繪製才需要真正的 image。見 CONTEXT.md 的 Scene。 */
+export interface SourceImage {
+  width: number
+  height: number
+  source: CanvasImageSource
+}
+
+/** 一次繪製的目標畫布：尺寸決定所有幾何，measure 決定文字排版。 */
+export interface Target {
+  width: number
+  height: number
+  measure: Measure
+  /** 疊加圖的高寬比（解碼後才知道）。未提供時當作 1。 */
+  overlayRatio?: (overlay: ImageOverlay) => number
+}
+
+/** 已解出的一格畫面內容——不含時間，不含 store，不含 React。 */
+export interface FrameState {
+  image: SourceImage
+  background: BackgroundSettings
+  camera: Camera
+  captions: CaptionData[]
+  overlays: ImageOverlay[]
+  mosaic: MosaicStroke[]
+  subtitle: { text: string; style?: SubtitleStyle } | null
+  /**
+   * ponytail: 編輯輔助線暫時留在 layer 上，好讓 step 1 逐像素不變。
+   * 之後 drawChrome 拆出去時整組移走，composeFrame 就再也畫不出輔助線。
+   */
+  chrome?: {
+    includeGuides: boolean
+    showCaptionBox: boolean
+    activeCaptionIndex: number
+    snapGuide: { x: boolean; y: boolean }
+    overlayGuides: boolean
+  }
+}
+
+/**
+ * 一層要畫的東西。陣列順序就是繪製順序，所以 hit-test 反向走訪不可能跟畫面不一致。
+ * 幾何都已解出（需要量測的部分在 layersFor 內算完），paint 只負責塗。
+ */
+export type Layer =
+  | { kind: 'background'; color: string; blur: { image: SourceImage; blurPx: number } | null }
+  | { kind: 'image'; image: SourceImage; src: Rect; dest: Rect; mosaic: MosaicStroke[] }
+  | { kind: 'overlay'; overlay: ImageOverlay; rect: Rect; opacity: number; guides: boolean }
+  | { kind: 'caption'; captionIndex: number; cap: CaptionData; layout: CaptionLayout; guides: boolean; snapGuide: { x: boolean; y: boolean } }
+  | { kind: 'subtitle'; style: SubtitleStyle | undefined; layout: SubtitleLayout }
+
+/** 旁白字幕的量測結果：行、位置、字型都算好，背景條算好或為 null。 */
+export interface SubtitleLayout {
+  lines: { text: string; x: number; y: number; font: string }[]
+  box: Rect | null
+  boxRadius: number
+  strokeWidth: number
+}
+
+export function canvasTarget(ctx: CanvasRenderingContext2D, overlayRatio?: (overlay: ImageOverlay) => number): Target {
+  return {
+    width: ctx.canvas.width,
+    height: ctx.canvas.height,
+    measure: canvasMeasure(ctx),
+    overlayRatio,
+  }
 }
 
 export interface Camera {
@@ -44,7 +114,7 @@ export function fitImageRect(
   return { x: (canvas.width - w) / 2, y: (canvas.height - h) / 2, w, h, scale }
 }
 
-export function getCameraSourceRect(image: HTMLImageElement, p: CameraPoint) {
+export function getCameraSourceRect(image: { width: number; height: number }, p: CameraPoint) {
   const naturalRatio = image.width / image.height
   let baseW: number, baseH: number
   if (naturalRatio > OUTPUT_RATIO) {
@@ -112,22 +182,26 @@ if (typeof document !== 'undefined' && document.fonts?.addEventListener) {
   document.fonts.addEventListener('loadingdone', () => { fontGeneration++ })
 }
 
+/** 既有呼叫端（CanvasEditor 的命中測試）用的形式；內部一律走 captionLayout(target, cap)。 */
 export function getCaptionLayout(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cap: CaptionData
 ): CaptionLayout {
-  const cacheKey = `${canvas.width}x${canvas.height}|${fontGeneration}`
+  return captionLayout(canvasTarget(ctx), cap)
+}
+
+export function captionLayout(target: Target, cap: CaptionData): CaptionLayout {
+  const cacheKey = `${target.width}x${target.height}|${fontGeneration}`
   const cached = captionLayoutCache.get(cap)
   if (cached && cached.key === cacheKey) return cached.layout
-  const layout = computeCaptionLayout(canvas, ctx, cap)
+  const layout = computeCaptionLayout(target, cap)
   captionLayoutCache.set(cap, { key: cacheKey, layout })
   return layout
 }
 
 function computeCaptionLayout(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
+  target: Target,
   cap: CaptionData
 ): CaptionLayout {
   const fontFamily = cap.fontFamily || DEFAULT_FONT
@@ -136,20 +210,20 @@ function computeCaptionLayout(
   const subSize = 34 * cap.scale * (cap.subtitleScale || 1)
   const mainLine = mainSize * 1.25
   const subLine = subSize * 1.28
-  const baseTextMaxW = canvas.width * 0.78
+  const baseTextMaxW = target.width * 0.78
   const boxScaleX = cap.boxScaleX || 1
   const textMaxW = baseTextMaxW * boxScaleX
-  const mainLines = wrapText(ctx, cap.text || '', textMaxW, `800 ${mainSize}px ${fontFamily}`)
-  const subLines = wrapText(ctx, cap.subtitle || '', textMaxW, `650 ${subSize}px ${subtitleFontFamily}`)
+  const mainLines = wrapText(target.measure, cap.text || '', textMaxW, `800 ${mainSize}px ${fontFamily}`)
+  const subLines = wrapText(target.measure, cap.subtitle || '', textMaxW, `650 ${subSize}px ${subtitleFontFamily}`)
   const gap = mainLines.length && subLines.length ? 18 * cap.scale : 0
   const textH = mainLines.length * mainLine + gap + subLines.length * subLine
   const padX = 38 * cap.scale
   const padY = 24 * cap.scale
   const baseH = Math.max(70, textH + padY * 2)
-  const width = Math.min(canvas.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, 240 + padX * 2))
-  const height = Math.min(canvas.height * 0.5, baseH * (cap.boxScaleY || 1))
-  const cx = cap.x * canvas.width
-  const cy = cap.y * canvas.height
+  const width = Math.min(target.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, 240 + padX * 2))
+  const height = Math.min(target.height * 0.5, baseH * (cap.boxScaleY || 1))
+  const cx = cap.x * target.width
+  const cy = cap.y * target.height
   return {
     fontFamily, subtitleFontFamily, mainLines, subLines,
     mainSize, subSize, mainLine, subLine, gap, textH,
@@ -161,8 +235,8 @@ function computeCaptionLayout(
 // 以 image 為 key 快取模糊結果，同一張圖 + 相同設定只算一次。
 const blurBackgroundCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>()
 
-function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement, bg: BackgroundSettings) {
-  const key = `${bg.blur || 0}|${canvas.width}x${canvas.height}`
+function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement, blurPx: number) {
+  const key = `${blurPx}|${canvas.width}x${canvas.height}`
   let perImage = blurBackgroundCache.get(image)
   if (!perImage) {
     perImage = new Map()
@@ -174,13 +248,13 @@ function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement
   off.width = canvas.width
   off.height = canvas.height
   const offCtx = off.getContext('2d')!
-  offCtx.filter = `blur(${bg.blur || 0}px)`
+  offCtx.filter = `blur(${blurPx}px)`
   const scale = Math.max(off.width / image.width, off.height / image.height)
   const dw = image.width * scale
   const dh = image.height * scale
   const dx = (off.width - dw) / 2
   const dy = (off.height - dh) / 2
-  const bleed = Math.max(0, (bg.blur || 0) * 2)
+  const bleed = Math.max(0, blurPx * 2)
   offCtx.drawImage(image, dx - bleed, dy - bleed, dw + bleed * 2, dh + bleed * 2)
   // 編輯畫布與匯出畫布尺寸不同會各留一份；超過 4 份時清掉最舊的
   if (perImage.size >= 4) perImage.delete(perImage.keys().next().value!)
@@ -197,7 +271,127 @@ export function drawOutputBackground(
   ctx.fillStyle = bg.color || '#000000'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   if (!image || bg.mode !== 'blur') return
-  ctx.drawImage(getBlurredBackground(canvas, image, bg), 0, 0)
+  ctx.drawImage(getBlurredBackground(canvas, image, bg.blur || 0), 0, 0)
+}
+
+/**
+ * 一格畫面 = 一串 layer。純函式：只讀 state 與 target，不碰 canvas、不碰 React。
+ * 陣列順序就是繪製順序。
+ */
+export function layersFor(state: FrameState, target: Target): Layer[] {
+  const { image, camera, mosaic, chrome } = state
+  const layers: Layer[] = []
+
+  layers.push({
+    kind: 'background',
+    color: state.background.color || '#000000',
+    blur: state.background.mode === 'blur' ? { image, blurPx: state.background.blur || 0 } : null,
+  })
+
+  const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
+  const src = getCameraSourceRect(image, p as CameraPoint)
+  const ix = Math.max(0, src.sx)
+  const iy = Math.max(0, src.sy)
+  const ix2 = Math.min(image.width, src.sx + src.sw)
+  const iy2 = Math.min(image.height, src.sy + src.sh)
+  const iw = ix2 - ix
+  const ih = iy2 - iy
+  if (iw > 0 && ih > 0) {
+    layers.push({
+      kind: 'image',
+      image,
+      src: { x: ix, y: iy, w: iw, h: ih },
+      dest: {
+        x: ((ix - src.sx) / src.sw) * target.width,
+        y: ((iy - src.sy) / src.sh) * target.height,
+        w: (iw / src.sw) * target.width,
+        h: (ih / src.sh) * target.height,
+      },
+      mosaic,
+    })
+  }
+
+  const ratioOf = target.overlayRatio ?? (() => 1)
+  for (const overlay of state.overlays) {
+    const w = overlay.scale * target.width
+    const h = w * ratioOf(overlay)
+    layers.push({
+      kind: 'overlay',
+      overlay,
+      rect: {
+        x: overlay.x * target.width - w / 2,
+        y: overlay.y * target.height - h / 2,
+        w,
+        h,
+      },
+      opacity: clamp(overlay.opacity, 0, 1),
+      guides: chrome?.overlayGuides ?? false,
+    })
+  }
+
+  state.captions.forEach((cap, i) => {
+    layers.push({
+      kind: 'caption',
+      captionIndex: i,
+      cap,
+      layout: captionLayout(target, cap),
+      guides: !!chrome && chrome.includeGuides && i === chrome.activeCaptionIndex && chrome.showCaptionBox,
+      snapGuide: chrome?.snapGuide ?? { x: false, y: false },
+    })
+  })
+
+  if (state.subtitle) {
+    layers.push({
+      kind: 'subtitle',
+      style: state.subtitle.style,
+      layout: subtitleLayout(target, state.subtitle.text, state.subtitle.style),
+    })
+  }
+
+  return layers
+}
+
+/** 把 layer 依序塗上去。所有幾何都已算好，這裡只做 canvas 呼叫。 */
+export function paint(layers: Layer[], ctx: CanvasRenderingContext2D) {
+  const canvas = ctx.canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  for (const layer of layers) {
+    switch (layer.kind) {
+      case 'background': {
+        ctx.fillStyle = layer.color
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        if (layer.blur) {
+          ctx.drawImage(getBlurredBackground(canvas, layer.blur.image.source as HTMLImageElement, layer.blur.blurPx), 0, 0)
+        }
+        break
+      }
+      case 'image': {
+        const source = layer.mosaic.length
+          ? getMosaickedImage(layer.image.source as HTMLImageElement, layer.mosaic)
+          : layer.image.source
+        ctx.drawImage(source, layer.src.x, layer.src.y, layer.src.w, layer.src.h,
+          layer.dest.x, layer.dest.y, layer.dest.w, layer.dest.h)
+        break
+      }
+      case 'overlay': {
+        const img = getOverlayImage(layer.overlay)
+        if (img) {
+          ctx.save()
+          ctx.globalAlpha = layer.opacity
+          ctx.drawImage(img, layer.rect.x, layer.rect.y, layer.rect.w, layer.rect.h)
+          ctx.restore()
+        }
+        if (layer.guides) paintOverlayGuides(ctx, layer.rect)
+        break
+      }
+      case 'caption':
+        paintCaption(ctx, layer.cap, layer.layout, layer.guides, layer.snapGuide)
+        break
+      case 'subtitle':
+        paintSubtitle(ctx, layer.layout, layer.style)
+        break
+    }
+  }
 }
 
 export function drawCamera(
@@ -219,52 +413,42 @@ export function drawCamera(
   mosaicStrokes?: MosaicStroke[],
   showMosaic = true
 ) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
-  const src = getCameraSourceRect(image, p as CameraPoint)
-  const imageSource = showMosaic && mosaicStrokes?.length ? getMosaickedImage(image, mosaicStrokes) : image
-  drawOutputBackground(canvas, ctx, image, bg)
-  const ix = Math.max(0, src.sx)
-  const iy = Math.max(0, src.sy)
-  const ix2 = Math.min(image.width, src.sx + src.sw)
-  const iy2 = Math.min(image.height, src.sy + src.sh)
-  const iw = ix2 - ix
-  const ih = iy2 - iy
-  if (iw > 0 && ih > 0) {
-    const dx = ((ix - src.sx) / src.sw) * canvas.width
-    const dy = ((iy - src.sy) / src.sh) * canvas.height
-    const dw = (iw / src.sw) * canvas.width
-    const dh = (ih / src.sh) * canvas.height
-    ctx.drawImage(imageSource, ix, iy, iw, ih, dx, dy, dw, dh)
+  const state: FrameState = {
+    image: { width: image.width, height: image.height, source: image },
+    background: bg,
+    camera,
+    captions: captionPoint ? getAllCaptions(captionPoint) : [],
+    overlays: overlays?.length && overlayTime != null
+      ? overlays.filter(o => isOverlayActiveAt(o, overlayTime))
+      : [],
+    mosaic: showMosaic && mosaicStrokes?.length ? mosaicStrokes : [],
+    subtitle: narrationText ? { text: narrationText, style: subtitleStyle } : null,
+    chrome: {
+      includeGuides,
+      showCaptionBox,
+      activeCaptionIndex,
+      snapGuide,
+      overlayGuides: overlayGuides ?? false,
+    },
   }
-  if (overlays?.length && overlayTime != null) {
-    drawOverlays(canvas, ctx, overlays, overlayTime, { guides: overlayGuides })
-  }
-  if (captionPoint) {
-    getAllCaptions(captionPoint).forEach((cap, i) => {
-      drawCaption(canvas, ctx, cap, includeGuides && i === activeCaptionIndex && showCaptionBox, snapGuide)
-    })
-  }
-  if (narrationText) {
-    drawNarrationSubtitle(canvas, ctx, narrationText, subtitleStyle)
-  }
+  paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
 }
 
 /**
- * Greedily wraps words into lines that each fit within maxWidth using ctx.measureText.
- * The ctx.font must already be set to the desired font before calling this function.
+ * Greedily wraps words into lines that each fit within maxWidth.
  * No text deformation or font-size changes — lines simply break at word boundaries.
  */
 export function wrapWordsToLines(
   words: string[],
-  ctx: CanvasRenderingContext2D,
+  measure: Measure,
+  font: string,
   maxWidth: number
 ): string[] {
   const lines: string[] = []
   let current = ''
   for (const word of words) {
     const candidate = current ? `${current} ${word}` : word
-    if (current && ctx.measureText(candidate).width > maxWidth) {
+    if (current && measure(candidate, font) > maxWidth) {
       lines.push(current)
       current = word
     } else {
@@ -279,66 +463,83 @@ function hasCjkText(text: string) {
   return /[\u3400-\u9fff]/.test(text)
 }
 
-export function drawNarrationSubtitle(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  style?: SubtitleStyle
-) {
-  if (!text) return
-  ctx.save()
+/** 純排版：算出每一行的位置與字型、背景條的方框。不碰 canvas。 */
+export function subtitleLayout(target: Target, text: string, style?: SubtitleStyle): SubtitleLayout {
   const sizeRatio = style?.fontSizeRatio ?? 0.055
   const fontFamily = style?.fontFamily ?? "Georgia, 'Times New Roman', serif"
-  const fontSize = Math.round(canvas.width * sizeRatio)
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
+  const fontSize = Math.round(target.width * sizeRatio)
+  const mainFont = `700 ${fontSize}px ${fontFamily}`
 
   // Fixed side padding — text stays within this boundary, font size never changes.
-  const sidePadding = Math.round(canvas.width * 0.06)
-  const maxLineWidth = canvas.width - sidePadding * 2
+  const sidePadding = Math.round(target.width * 0.06)
+  const maxLineWidth = target.width - sidePadding * 2
 
   const [mainText = '', subText = ''] = text.split('\n')
-  ctx.font = `700 ${fontSize}px ${fontFamily}`
   const mainLines = mainText.trim() ? [mainText.trim()] : []
   const subFontSize = Math.round(fontSize * (style?.translationScale ?? 0.72))
-  ctx.font = `650 ${subFontSize}px ${fontFamily}`
+  const subFont = `650 ${subFontSize}px ${fontFamily}`
   const trimmedSubText = subText.trim()
   const subLines = trimmedSubText
     ? hasCjkText(trimmedSubText)
-      ? wrapWordsToLines(Array.from(trimmedSubText), ctx, maxLineWidth).map(line => line.replace(/\s+/g, ''))
-      : wrapWordsToLines(trimmedSubText.split(/\s+/), ctx, maxLineWidth)
+      ? wrapWordsToLines(Array.from(trimmedSubText), target.measure, subFont, maxLineWidth).map(line => line.replace(/\s+/g, ''))
+      : wrapWordsToLines(trimmedSubText.split(/\s+/), target.measure, subFont, maxLineWidth)
     : []
 
   const posX = style?.subtitlePosition?.x ?? 0.5
   const posY = style?.subtitlePosition?.y ?? 0.87
-  const cx = canvas.width * posX
+  const cx = target.width * posX
   const lineHeight = Math.round(fontSize * 1.35)
   const subLineHeight = Math.round(subFontSize * 1.35)
-  const centerY = Math.round(canvas.height * posY)
-
-  const shadowEnabled = style?.shadowEnabled ?? true
-  const shadowBlur = style?.shadowBlur ?? 10
-  const shadowOpacity = style?.shadowOpacity ?? 0.9
+  const centerY = Math.round(target.height * posY)
 
   const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
 
   // ── 半透明背景條 ────────────────────────────────────────────────
+  let box: Rect | null = null
   if ((style?.backgroundEnabled ?? false) && totalHeight > 0) {
-    ctx.font = `700 ${fontSize}px ${fontFamily}`
-    let maxWidth = mainLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), 0)
-    ctx.font = `650 ${subFontSize}px ${fontFamily}`
-    maxWidth = subLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), maxWidth)
+    let maxWidth = mainLines.reduce((w, line) => Math.max(w, target.measure(line, mainFont)), 0)
+    maxWidth = subLines.reduce((w, line) => Math.max(w, target.measure(line, subFont)), maxWidth)
     const padX = Math.round(fontSize * 0.5)
     const padY = Math.round(fontSize * 0.3)
-    const boxW = Math.min(canvas.width * 0.96, maxWidth + padX * 2)
+    const boxW = Math.min(target.width * 0.96, maxWidth + padX * 2)
     const boxH = totalHeight + padY * 2
+    box = { x: cx - boxW / 2, y: centerY - boxH / 2, w: boxW, h: boxH }
+  }
+
+  const lines: SubtitleLayout['lines'] = []
+  let y = centerY - totalHeight / 2 + lineHeight / 2
+  for (const line of mainLines) {
+    lines.push({ text: line, x: cx, y, font: mainFont })
+    y += lineHeight
+  }
+  for (const line of subLines) {
+    lines.push({ text: line, x: cx, y: y - (lineHeight - subLineHeight) / 2, font: subFont })
+    y += subLineHeight
+  }
+
+  return {
+    lines,
+    box,
+    boxRadius: Math.round(fontSize * 0.25),
+    strokeWidth: Math.max(1, (style?.strokeWidth ?? 4) / 1080 * target.width),
+  }
+}
+
+function paintSubtitle(ctx: CanvasRenderingContext2D, layout: SubtitleLayout, style?: SubtitleStyle) {
+  if (!layout.lines.length && !layout.box) return
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  if (layout.box) {
     ctx.fillStyle = `rgba(0,0,0,${style?.backgroundOpacity ?? 0.45})`
-    roundRect(ctx, cx - boxW / 2, centerY - boxH / 2, boxW, boxH, Math.round(fontSize * 0.25))
+    roundRect(ctx, layout.box.x, layout.box.y, layout.box.w, layout.box.h, layout.boxRadius)
     ctx.fill()
   }
 
-  ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${shadowOpacity})` : 'transparent'
-  ctx.shadowBlur = shadowEnabled ? shadowBlur : 0
+  const shadowEnabled = style?.shadowEnabled ?? true
+  ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${style?.shadowOpacity ?? 0.9})` : 'transparent'
+  ctx.shadowBlur = shadowEnabled ? (style?.shadowBlur ?? 10) : 0
   ctx.shadowOffsetX = shadowEnabled ? 2 : 0
   ctx.shadowOffsetY = shadowEnabled ? 2 : 0
   ctx.fillStyle = style?.color ?? '#ffffff'
@@ -346,33 +547,33 @@ export function drawNarrationSubtitle(
   const strokeEnabled = style?.strokeEnabled ?? false
   if (strokeEnabled) {
     ctx.strokeStyle = style?.strokeColor ?? '#000000'
-    ctx.lineWidth = Math.max(1, (style?.strokeWidth ?? 4) / 1080 * canvas.width)
+    ctx.lineWidth = layout.strokeWidth
     ctx.lineJoin = 'round'
   }
-  const drawLine = (line: string, x: number, y: number) => {
+
+  for (const line of layout.lines) {
+    ctx.font = line.font
     if (strokeEnabled) {
       // 描邊不帶陰影，避免疊出雙重黑邊
       const sc = ctx.shadowColor
       ctx.shadowColor = 'transparent'
-      ctx.strokeText(line, x, y)
+      ctx.strokeText(line.text, line.x, line.y)
       ctx.shadowColor = sc
     }
-    ctx.fillText(line, x, y)
-  }
-
-  let y = centerY - totalHeight / 2 + lineHeight / 2
-  ctx.font = `700 ${fontSize}px ${fontFamily}`
-  for (const line of mainLines) {
-    drawLine(line, cx, y)
-    y += lineHeight
-  }
-  ctx.font = `650 ${subFontSize}px ${fontFamily}`
-  for (const line of subLines) {
-    drawLine(line, cx, y - (lineHeight - subLineHeight) / 2)
-    y += subLineHeight
+    ctx.fillText(line.text, line.x, line.y)
   }
 
   ctx.restore()
+}
+
+export function drawNarrationSubtitle(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  style?: SubtitleStyle
+) {
+  if (!text) return
+  paintSubtitle(ctx, subtitleLayout(canvasTarget(ctx), text, style), style)
 }
 
 export function drawCaption(
@@ -384,7 +585,19 @@ export function drawCaption(
 ) {
   const hasText = !!((cap.text || '').trim() || (cap.subtitle || '').trim())
   if (!hasText && !includeGuides) return
-  const layout = getCaptionLayout(canvas, ctx, cap)
+  paintCaption(ctx, cap, captionLayout(canvasTarget(ctx), cap), includeGuides, snapGuide)
+}
+
+function paintCaption(
+  ctx: CanvasRenderingContext2D,
+  cap: CaptionData,
+  layout: CaptionLayout,
+  includeGuides: boolean,
+  snapGuide: { x: boolean; y: boolean }
+) {
+  const canvas = ctx.canvas
+  const hasText = !!((cap.text || '').trim() || (cap.subtitle || '').trim())
+  if (!hasText && !includeGuides) return
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'

@@ -31,14 +31,22 @@ export function isOverlayActiveAt(overlay: ImageOverlay, time: number) {
   return time >= overlay.startTime && time < overlay.startTime + overlay.duration
 }
 
+/**
+ * 疊加圖的高寬比。要等圖解碼完才知道，所以這是排版的隱藏輸入——
+ * layersFor 透過 Target.overlayRatio 把它變成明確的接縫。
+ */
+export function getOverlayRatio(overlay: ImageOverlay) {
+  const entry = overlayImageCache.get(overlay.id)
+  return entry?.loaded && entry.img.naturalWidth > 0
+    ? entry.img.naturalHeight / entry.img.naturalWidth
+    : 1
+}
+
 export function getOverlayCanvasRect(
   canvas: { width: number; height: number },
   overlay: ImageOverlay,
 ) {
-  const entry = overlayImageCache.get(overlay.id)
-  const ratio = entry?.loaded && entry.img.naturalWidth > 0
-    ? entry.img.naturalHeight / entry.img.naturalWidth
-    : 1
+  const ratio = getOverlayRatio(overlay)
   const w = overlay.scale * canvas.width
   const h = w * ratio
   return { x: overlay.x * canvas.width - w / 2, y: overlay.y * canvas.height - h / 2, w, h }
@@ -61,24 +69,29 @@ export function drawOverlays(
       ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h)
       ctx.restore()
     }
-    if (options?.guides) {
-      ctx.save()
-      ctx.setLineDash([12, 10])
-      ctx.lineWidth = 4
-      ctx.strokeStyle = 'rgba(236,72,153,.9)'
-      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h)
-      ctx.setLineDash([])
-      // 右下角縮放 handle
-      ctx.beginPath()
-      ctx.arc(rect.x + rect.w, rect.y + rect.h, 16, 0, Math.PI * 2)
-      ctx.fillStyle = 'white'
-      ctx.fill()
-      ctx.strokeStyle = '#ec4899'
-      ctx.lineWidth = 5
-      ctx.stroke()
-      ctx.restore()
-    }
+    if (options?.guides) paintOverlayGuides(ctx, rect)
   }
+}
+
+export function paintOverlayGuides(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; w: number; h: number },
+) {
+  ctx.save()
+  ctx.setLineDash([12, 10])
+  ctx.lineWidth = 4
+  ctx.strokeStyle = 'rgba(236,72,153,.9)'
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  ctx.setLineDash([])
+  // 右下角縮放 handle
+  ctx.beginPath()
+  ctx.arc(rect.x + rect.w, rect.y + rect.h, 16, 0, Math.PI * 2)
+  ctx.fillStyle = 'white'
+  ctx.fill()
+  ctx.strokeStyle = '#ec4899'
+  ctx.lineWidth = 5
+  ctx.stroke()
+  ctx.restore()
 }
 
 /** 由上而下找命中的疊加圖（後加的先命中）；回傳 hit 類型 */

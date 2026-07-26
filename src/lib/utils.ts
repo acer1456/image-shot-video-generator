@@ -88,6 +88,16 @@ export function wait(ms: number) {
   return new Promise<void>(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * 量測文字寬度的接縫。正式環境用 canvas 量；測試傳入確定性的假量測器，
+ * 讓排版計算不需要 DOM。見 CONTEXT.md 的 Measure。
+ */
+export type Measure = (text: string, font: string) => number
+
+export function canvasMeasure(ctx: CanvasRenderingContext2D): Measure {
+  return (text, font) => measureText(ctx, text, font)
+}
+
 export function measureText(ctx: CanvasRenderingContext2D, text: string, font: string) {
   ctx.save()
   ctx.font = font
@@ -97,14 +107,12 @@ export function measureText(ctx: CanvasRenderingContext2D, text: string, font: s
 }
 
 export function wrapText(
-  ctx: CanvasRenderingContext2D,
+  measure: Measure,
   text: string,
   maxWidth: number,
   font: string
 ): string[] {
   if (!text.trim()) return []
-  ctx.save()
-  ctx.font = font
   const result: string[] = []
   text.split('\n').forEach(paragraph => {
     const tokens = paragraph.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*|\s+|[^\sA-Za-z0-9]+/g) || ['']
@@ -116,7 +124,7 @@ export function wrapText(
     const appendPiece = (piece: string) => {
       if (!piece) return
       if (!line) {
-        if (ctx.measureText(piece).width <= maxWidth) {
+        if (measure(piece, font) <= maxWidth) {
           line = piece
           return
         }
@@ -124,12 +132,12 @@ export function wrapText(
         return
       }
       const test = line + piece
-      if (ctx.measureText(test).width <= maxWidth) {
+      if (measure(test, font) <= maxWidth) {
         line = test
         return
       }
       flushLine()
-      if (ctx.measureText(piece).width <= maxWidth) {
+      if (measure(piece, font) <= maxWidth) {
         line = piece
         return
       }
@@ -146,6 +154,5 @@ export function wrapText(
     if (line.trim()) result.push(line.trimEnd())
     else if (!paragraph.trim()) result.push(' ')
   })
-  ctx.restore()
   return result
 }
