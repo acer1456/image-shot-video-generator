@@ -43,17 +43,19 @@ export interface FrameState {
   overlays: ImageOverlay[]
   mosaic: MosaicStroke[]
   subtitle: { text: string; style?: SubtitleStyle } | null
-  /**
-   * ponytail: 編輯輔助線暫時留在 layer 上，好讓 step 1 逐像素不變。
-   * 之後 drawChrome 拆出去時整組移走，composeFrame 就再也畫不出輔助線。
-   */
-  chrome?: {
-    includeGuides: boolean
-    showCaptionBox: boolean
-    activeCaptionIndex: number
-    snapGuide: { x: boolean; y: boolean }
-    overlayGuides: boolean
-  }
+}
+
+/**
+ * 編輯器專用的標記：字幕框、吸附線、疊加圖把手、安全區。
+ * 永遠不屬於畫面內容，所以由 drawChrome 另外一趟畫——
+ * 匯出路徑不呼叫它，也就畫不出來。見 CONTEXT.md 的 Chrome。
+ */
+export interface Chrome {
+  activeCaptionIndex: number
+  captionBox: boolean
+  snapGuide: { x: boolean; y: boolean }
+  overlayGuides: boolean
+  safeArea?: { ig: boolean; shorts: boolean; tiktok: boolean }
 }
 
 /**
@@ -63,8 +65,8 @@ export interface FrameState {
 export type Layer =
   | { kind: 'background'; color: string; blur: { image: SourceImage; blurPx: number } | null }
   | { kind: 'image'; image: SourceImage; src: Rect; dest: Rect; mosaic: MosaicStroke[] }
-  | { kind: 'overlay'; overlay: ImageOverlay; rect: Rect; opacity: number; guides: boolean }
-  | { kind: 'caption'; captionIndex: number; cap: CaptionData; layout: CaptionLayout; guides: boolean; snapGuide: { x: boolean; y: boolean } }
+  | { kind: 'overlay'; overlay: ImageOverlay; rect: Rect; opacity: number }
+  | { kind: 'caption'; captionIndex: number; cap: CaptionData; layout: CaptionLayout }
   | { kind: 'subtitle'; style: SubtitleStyle | undefined; layout: SubtitleLayout }
 
 /** 旁白字幕的量測結果：行、位置、字型都算好，背景條算好或為 null。 */
@@ -279,7 +281,7 @@ function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement
  * 陣列順序就是繪製順序。
  */
 export function layersFor(state: FrameState, target: Target): Layer[] {
-  const { image, camera, mosaic, chrome } = state
+  const { image, camera, mosaic } = state
   const layers: Layer[] = []
 
   layers.push({
@@ -325,7 +327,6 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
         h,
       },
       opacity: clamp(overlay.opacity, 0, 1),
-      guides: chrome?.overlayGuides ?? false,
     })
   }
 
@@ -335,8 +336,6 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
       captionIndex: i,
       cap,
       layout: captionLayout(target, cap),
-      guides: !!chrome && chrome.includeGuides && i === chrome.activeCaptionIndex && chrome.showCaptionBox,
-      snapGuide: chrome?.snapGuide ?? { x: false, y: false },
     })
   })
 
@@ -381,58 +380,16 @@ export function paint(layers: Layer[], ctx: CanvasRenderingContext2D) {
           ctx.drawImage(img, layer.rect.x, layer.rect.y, layer.rect.w, layer.rect.h)
           ctx.restore()
         }
-        if (layer.guides) paintOverlayGuides(ctx, layer.rect)
         break
       }
       case 'caption':
-        paintCaption(ctx, layer.cap, layer.layout, layer.guides, layer.snapGuide)
+        paintCaption(ctx, layer.cap, layer.layout)
         break
       case 'subtitle':
         paintSubtitle(ctx, layer.layout, layer.style)
         break
     }
   }
-}
-
-export function drawCamera(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  camera: Camera,
-  bg: BackgroundSettings,
-  captionPoint: CameraPoint | null,
-  includeGuides: boolean,
-  showCaptionBox: boolean,
-  snapGuide: { x: boolean; y: boolean },
-  activeCaptionIndex = 0,
-  narrationText?: string,
-  subtitleStyle?: SubtitleStyle,
-  overlays?: ImageOverlay[],
-  overlayTime?: number,
-  overlayGuides?: boolean,
-  mosaicStrokes?: MosaicStroke[],
-  showMosaic = true
-) {
-  const state: FrameState = {
-    pointIndex: 0,
-    image: { width: image.width, height: image.height, source: image },
-    background: bg,
-    camera,
-    captions: captionPoint ? getAllCaptions(captionPoint) : [],
-    overlays: overlays?.length && overlayTime != null
-      ? overlays.filter(o => isOverlayActiveAt(o, overlayTime))
-      : [],
-    mosaic: showMosaic && mosaicStrokes?.length ? mosaicStrokes : [],
-    subtitle: narrationText ? { text: narrationText, style: subtitleStyle } : null,
-    chrome: {
-      includeGuides,
-      showCaptionBox,
-      activeCaptionIndex,
-      snapGuide,
-      overlayGuides: overlayGuides ?? false,
-    },
-  }
-  paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
 }
 
 // ─── Scene：一支影片的完整內容，與時間無關 ───────────────────────────────
@@ -470,15 +427,16 @@ export function sceneDuration(scene: Scene): number {
 }
 
 /**
- * 鏡頭點 index 對應的時間點——停留區段的開頭，沒有停留就用移動的開頭。
- * 以點為單位思考的呼叫端（縮圖、時間軸選取）用它換成時間，畫面一律以時間定址。
+ * 鏡頭點 index 對應的時間點：鏡頭「抵達」該點的瞬間，也就是移動段的結尾。
+ * 有停留時它剛好等於停留段的開頭。
+ *
+ * 不能用移動段的開頭——那一刻鏡頭還停在前一個點上，停留時間為 0 的點
+ * 會因此顯示成前一個點的取景。
  */
 export function timeOfPoint(points: CameraPoint[], index: number): number {
   const { items } = buildTimeline(points)
-  const hold = items.find(item => item.pointIndex === index && item.type === 'hold')
-  if (hold) return hold.start
   const move = items.find(item => item.pointIndex === index && item.type === 'move')
-  return move ? move.start : 0
+  return move ? move.end : 0
 }
 
 export function getActiveSubtitleCue(cues: SubtitleCue[], time: number): SubtitleCue | null {
@@ -494,7 +452,7 @@ export function getSubtitleRenderText(cue: SubtitleCue | null): string {
 }
 
 /** 把 Scene 在時間 t 解成一格畫面。沒有鏡頭點時回傳 null。 */
-export function frameStateAt(scene: Scene, t: number, chrome?: FrameState['chrome']): FrameState | null {
+export function frameStateAt(scene: Scene, t: number): FrameState | null {
   const image = scene.image
   if (!image) return null
   const timeline = getTimelineStateAt(image, scene.points, t)
@@ -510,12 +468,11 @@ export function frameStateAt(scene: Scene, t: number, chrome?: FrameState['chrom
     overlays: scene.overlays.filter(o => isOverlayActiveAt(o, t)),
     mosaic: scene.mosaic,
     subtitle: text ? { text, style: cue?.style } : null,
-    chrome,
   }
 }
 
-export function layersAt(scene: Scene, t: number, target: Target, chrome?: FrameState['chrome']): Layer[] {
-  const state = frameStateAt(scene, t, chrome)
+export function layersAt(scene: Scene, t: number, target: Target): Layer[] {
+  const state = frameStateAt(scene, t)
   return state ? layersFor(state, target) : []
 }
 
@@ -528,12 +485,32 @@ export function composeFrame(
   scene: Scene,
   t: number,
   ctx: CanvasRenderingContext2D,
-  chrome?: FrameState['chrome'],
 ): FrameState | null {
-  const state = frameStateAt(scene, t, chrome)
+  const state = frameStateAt(scene, t)
   if (!state) return null
   paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
   return state
+}
+
+/**
+ * 在已經畫好的畫面上疊編輯標記。跟 composeFrame 走同一組 layer，
+ * 所以框線位置不可能跟畫出來的字幕對不上。匯出路徑不呼叫這支。
+ */
+export function drawChrome(scene: Scene, t: number, ctx: CanvasRenderingContext2D, chrome: Chrome) {
+  const layers = layersAt(scene, t, canvasTarget(ctx, getOverlayRatio))
+  if (chrome.overlayGuides) {
+    for (const layer of layers) {
+      if (layer.kind === 'overlay') paintOverlayGuides(ctx, layer.rect)
+    }
+  }
+  if (chrome.captionBox) {
+    for (const layer of layers) {
+      if (layer.kind === 'caption' && layer.captionIndex === chrome.activeCaptionIndex) {
+        paintCaptionGuides(ctx, layer.layout, chrome.snapGuide)
+      }
+    }
+  }
+  if (chrome.safeArea) drawCaptionSafeArea(ctx.canvas, ctx, chrome.safeArea)
 }
 
 /** 匯出時才做的繁簡轉換：Scene 進、Scene 出，所以預覽與匯出的差別就是這一行。 */
@@ -682,12 +659,10 @@ function paintCaption(
   ctx: CanvasRenderingContext2D,
   cap: CaptionData,
   layout: CaptionLayout,
-  includeGuides: boolean,
-  snapGuide: { x: boolean; y: boolean }
 ) {
   const canvas = ctx.canvas
   const hasText = !!((cap.text || '').trim() || (cap.subtitle || '').trim())
-  if (!hasText && !includeGuides) return
+  if (!hasText) return
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -747,20 +722,29 @@ function paintCaption(
     ctx.shadowOffsetX = 0
     ctx.shadowOffsetY = 0
   }
-  if (includeGuides) {
-    drawSnapGuides(canvas, ctx, snapGuide)
-    ctx.setLineDash([14, 10])
-    ctx.lineWidth = 4
-    ctx.strokeStyle = 'rgba(251,191,36,.95)'
-    ctx.strokeRect(layout.x, layout.y, layout.width, layout.height)
-    ctx.setLineDash([])
-    ctx.fillStyle = '#fbbf24'
-    ctx.fillRect(layout.x + layout.width - 28, layout.y + layout.height - 28, 28, 28)
-    ctx.fillStyle = '#60a5fa'
-    ctx.fillRect(layout.x + layout.width - 14, layout.y + layout.height / 2 - 34, 28, 68)
-    ctx.fillStyle = '#34d399'
-    ctx.fillRect(layout.x + layout.width / 2 - 34, layout.y + layout.height - 14, 68, 28)
-  }
+  ctx.restore()
+}
+
+/** 字幕框、縮放把手、吸附線。只有 chrome 會用到。 */
+function paintCaptionGuides(
+  ctx: CanvasRenderingContext2D,
+  layout: CaptionLayout,
+  snapGuide: { x: boolean; y: boolean },
+) {
+  const canvas = ctx.canvas
+  ctx.save()
+  drawSnapGuides(canvas, ctx, snapGuide)
+  ctx.setLineDash([14, 10])
+  ctx.lineWidth = 4
+  ctx.strokeStyle = 'rgba(251,191,36,.95)'
+  ctx.strokeRect(layout.x, layout.y, layout.width, layout.height)
+  ctx.setLineDash([])
+  ctx.fillStyle = '#fbbf24'
+  ctx.fillRect(layout.x + layout.width - 28, layout.y + layout.height - 28, 28, 28)
+  ctx.fillStyle = '#60a5fa'
+  ctx.fillRect(layout.x + layout.width - 14, layout.y + layout.height / 2 - 34, 28, 68)
+  ctx.fillStyle = '#34d399'
+  ctx.fillRect(layout.x + layout.width / 2 - 34, layout.y + layout.height - 14, 68, 28)
   ctx.restore()
 }
 

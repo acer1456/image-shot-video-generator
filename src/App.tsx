@@ -19,7 +19,7 @@ import { useVideoRender } from '@/hooks/useVideoRender'
 import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
-import { composeFrame, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
+import { composeFrame, drawChrome, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
@@ -219,14 +219,16 @@ function AppInner() {
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    // 與匯出完全同一支呼叫，只多了編輯輔助線
-    const state = composeFrame(scene, time, ctx, {
-      includeGuides: guides && store.showCaptionBox,
-      showCaptionBox: store.showCaptionBox,
-      activeCaptionIndex: 0,
-      snapGuide,
-      overlayGuides: false,
-    })
+    // 與匯出完全同一支呼叫；輔助線是另外疊上去的一趟
+    const state = composeFrame(scene, time, ctx)
+    if (guides && store.showCaptionBox) {
+      drawChrome(scene, time, ctx, {
+        activeCaptionIndex: 0,
+        captionBox: store.showCaptionBox,
+        snapGuide,
+        overlayGuides: false,
+      })
+    }
     if (state) store.setActiveIndex(state.pointIndex)
   }, [getCanvas, scene, store, snapGuide])
 
@@ -565,6 +567,17 @@ function AppInner() {
   const isDisabled = store.isRendering
   const activeSubtitleCue = store.showNarrationInOutput ? subtitleCues.find(cue => cue.id === activeSubtitleId) ?? null : null
   const currentSubtitleCue = activeSubtitleCue ?? (store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, currentTimeRef.current) : null)
+  // 編輯器看到的 Scene 與輸出略有不同，差異全部表達成資料：
+  //  · 顯示「目前選取」的字幕，而不是時間軸上那一則 → 用一則涵蓋全時段的 cue
+  //  · 塗馬賽克時即使輸出關閉也要看得見
+  const editorScene = useMemo<Scene>(() => ({
+    ...scene,
+    cues: currentSubtitleCue
+      ? [{ ...currentSubtitleCue, startTime: 0, duration: Number.MAX_SAFE_INTEGER }]
+      : [],
+    mosaic: (showMosaicInOutput || isMosaicPaintMode) ? mosaicStrokes : [],
+  }), [scene, currentSubtitleCue, showMosaicInOutput, isMosaicPaintMode, mosaicStrokes])
+
   const updateActiveSubtitleStyle = (pos: { x: number; y: number }) => {
     if (!currentSubtitleCue) return
     setSubtitleCues(cues => cues.map(cue =>
@@ -575,6 +588,7 @@ function AppInner() {
   }
 
   const canvasEditorProps = {
+    scene: editorScene,
     image: store.image,
     points: store.points,
     activeIndex: store.activeIndex,

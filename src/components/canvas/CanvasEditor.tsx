@@ -6,13 +6,16 @@ import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
 import {
-  fitImageRect, getCameraForPoint, getViewBoxCanvas,
-  drawCamera, drawCaptionSafeArea, getCaptionLayout, getAllCaptions,
-  imageToCanvasPoint, canvasToImageRatio
+  fitImageRect, getViewBoxCanvas, getCameraSourceRect,
+  composeFrame, drawChrome, timeOfPoint, drawCaptionSafeArea,
+  getCaptionLayout, getAllCaptions,
+  imageToCanvasPoint, canvasToImageRatio, type Scene
 } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
 
 interface CanvasEditorProps {
+  /** 編輯器要畫的內容。與匯出共用同一組 layer，只是多疊一層 chrome。 */
+  scene: Scene
   image: HTMLImageElement | null
   points: CameraPoint[]
   activeIndex: number
@@ -66,6 +69,7 @@ interface CaptionDragPreview {
 }
 
 export default function CanvasEditor({
+  scene,
   image, points, activeIndex, activeTab,
   backgroundSettings, safeAreaVisibility,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput,
@@ -133,10 +137,17 @@ export default function CanvasEditor({
     const scheduleOverlayRedraw = () => requestAnimationFrame(() => drawBaseRef.current?.())
 
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
-      const camera = getCameraForPoint(image, points[activeIndex])
-      const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, currentTimeRef.current, !overlaysLocked, mosaicStrokes, showMosaic)
-      if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
+      const t = timeOfPoint(scene.points, activeIndex)
+      composeFrame(scene, t, ctx)
+      if (showGuides) {
+        drawChrome(scene, t, ctx, {
+          activeCaptionIndex,
+          captionBox: showCaptionBox,
+          snapGuide,
+          overlayGuides: !overlaysLocked,
+          safeArea: safeAreaVisibility,
+        })
+      }
       return
     }
 
@@ -154,7 +165,7 @@ export default function CanvasEditor({
         onImageLoad: scheduleOverlayRedraw,
       })
     }
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
+  }, [scene, image, points, activeIndex, activeTab, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
 
   const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
     const canvas = canvasRef.current
@@ -182,44 +193,33 @@ export default function CanvasEditor({
     }
 
     const showGuides = !isRendering && (!isPreviewing || showGuidesInPreview)
-    const camera = getCameraForPoint(image, point)
-    const captionPoint = showCameraCaptionsInOutput ? previewPoint : null
-    drawCamera(
-      canvas,
-      ctx,
-      image,
-      camera,
-      backgroundSettings,
-      captionPoint,
-      showGuides && showCaptionBox,
-      showCaptionBox,
-      preview.snapGuide,
-      preview.captionIndex,
-      narrationText,
-      subtitleStyle,
-      imageOverlays,
-      currentTimeRef.current,
-      false,
-      mosaicStrokes,
-      showMosaic,
-    )
-    if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
+    // 拖曳中的字幕位置以 Scene 表示，不另外開一條繪製路徑
+    const previewScene: Scene = {
+      ...scene,
+      points: scene.points.map((p, i) => i === preview.pointIndex ? previewPoint : p),
+    }
+    const t = timeOfPoint(previewScene.points, preview.pointIndex)
+    composeFrame(previewScene, t, ctx)
+    if (showGuides) {
+      drawChrome(previewScene, t, ctx, {
+        activeCaptionIndex: preview.captionIndex,
+        captionBox: showCaptionBox,
+        snapGuide: preview.snapGuide,
+        // ponytail: 沿用原本行為——拖曳字幕時不畫疊加圖把手。
+        // 與 drawBase 的 !overlaysLocked 不一致，是既有的閃爍，不在本次改動範圍。
+        overlayGuides: false,
+        safeArea: safeAreaVisibility,
+      })
+    }
   }, [
-    backgroundSettings,
+    scene,
     image,
     isPreviewing,
     isRendering,
-    narrationText,
     points,
     safeAreaVisibility,
-    showCameraCaptionsInOutput,
     showCaptionBox,
     showGuidesInPreview,
-    subtitleStyle,
-    imageOverlays,
-    currentTimeRef,
-    mosaicStrokes,
-    showMosaic,
   ])
 
   const scheduleCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
@@ -655,12 +655,9 @@ export default function CanvasEditor({
       const center = imageToCanvasPoint(canvas, image, p)
       const desiredW = Math.abs(pos.x - center.x) * 2 / r.w * image.width
       const desiredH = Math.abs(pos.y - center.y) * 2 / r.h * image.height
-      const naturalRatio = image.width / image.height
-      let baseW: number, baseH: number
-      const OUTPUT_RATIO = OUTPUT_W / OUTPUT_H
-      if (naturalRatio > OUTPUT_RATIO) { baseW = image.width; baseH = baseW / OUTPUT_RATIO }
-      else { baseH = image.height; baseW = baseH * OUTPUT_RATIO }
-      const zoom = clamp(Math.min(baseW / Math.max(1, desiredW), baseH / Math.max(1, desiredH)), 1, 15)
+      // zoom=1 的取景範圍就是 base 尺寸；共用 getCameraSourceRect，不再自己算一次
+      const base = getCameraSourceRect(image, { ...p, zoom: 1 })
+      const zoom = clamp(Math.min(base.sw / Math.max(1, desiredW), base.sh / Math.max(1, desiredH)), 1, 15)
       onPointResize(drag.index, zoom)
     }
     if (drag.type === 'captionMove') {

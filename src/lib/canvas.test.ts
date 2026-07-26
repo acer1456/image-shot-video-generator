@@ -4,7 +4,7 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { frameStateAt, layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import { drawChrome, frameStateAt, layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
 import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
@@ -51,6 +51,20 @@ function state(over: Partial<FrameState> = {}): FrameState {
 }
 
 const kinds = (layers: Layer[]) => layers.map(l => l.kind)
+
+// 記錄用的假 ctx：drawChrome 只做繪圖呼叫，不讀回任何東西，所以這樣就夠測。
+function recordingCtx(width: number, height: number) {
+  const calls: { name: string; args: unknown[] }[] = []
+  const ctx = new Proxy({} as Record<string, unknown>, {
+    get(_t, prop: string) {
+      if (prop === 'canvas') return { width, height }
+      if (prop === 'measureText') return (text: string) => ({ width: text.length * 10 })
+      return (...args: unknown[]) => { calls.push({ name: prop, args }) }
+    },
+    set() { return true },
+  }) as unknown as CanvasRenderingContext2D
+  return { ctx, calls }
+}
 
 // 幾何是浮點運算，比對到 1e-6 就夠
 function assertRect(actual: { x: number; y: number; w: number; h: number }, expected: typeof actual, msg?: string) {
@@ -123,29 +137,44 @@ function assertRect(actual: { x: number; y: number; w: number; h: number }, expe
   assert.equal(o.rect.y, 1920 * 0.25 - 135)
 }
 
-// 7. 沒有 chrome 就沒有輔助線。匯出路徑靠這一點，而不是靠記得傳 false。
+// 7. layer 上根本沒有輔助線資料——匯出畫不出 chrome 是型別層面的事實，
+//    不是「記得傳 false」。
 {
   const layers = layersFor(state({
     captions: [caption({ text: 'A' })],
     overlays: [overlay()],
   }), target)
   for (const l of layers) {
-    if (l.kind === 'caption') assert.equal(l.guides, false)
-    if (l.kind === 'overlay') assert.equal(l.guides, false)
+    assert.ok(!('guides' in l), `${l.kind} layer 不該帶輔助線旗標`)
+    assert.ok(!('snapGuide' in l), `${l.kind} layer 不該帶吸附線`)
   }
 }
 
-// 8. 有 chrome 時，只有 active 的那一則字幕會拿到輔助線
+// 8. drawChrome 只替 active 的那一則字幕畫框，而且用的是跟畫面同一組 layer，
+//    所以框線位置不可能跟畫出來的字幕對不上。
 {
-  const layers = layersFor(state({
-    captions: [caption({ text: 'A' }), caption({ text: 'B' }), caption({ text: 'C' })],
-    chrome: {
-      includeGuides: true, showCaptionBox: true, activeCaptionIndex: 1,
-      snapGuide: { x: false, y: false }, overlayGuides: false,
-    },
-  }), target)
+  const s = scene({ points: [point({
+    caption: caption({ text: 'A' }),
+    extraCaptions: [caption({ text: 'B', y: 0.5 }), caption({ text: 'C', y: 0.3 })],
+  }) ] })
+  const t = timeOfPoint(s.points, 0)
+  const layers = layersAt(s, t, target)
   const captions = layers.filter(l => l.kind === 'caption')
-  assert.deepEqual(captions.map(c => c.kind === 'caption' && c.guides), [false, true, false])
+  assert.equal(captions.length, 3)
+
+  const { ctx, calls } = recordingCtx(1080, 1920)
+  drawChrome(s, t, ctx, { activeCaptionIndex: 1, captionBox: true, snapGuide: { x: false, y: false }, overlayGuides: false })
+
+  const boxes = calls.filter(c => c.name === 'strokeRect')
+  assert.equal(boxes.length, 1, '只有一個字幕框')
+  const want = captions[1]
+  if (want.kind !== 'caption') throw new Error('unreachable')
+  assert.deepEqual(boxes[0].args, [want.layout.x, want.layout.y, want.layout.width, want.layout.height])
+
+  // 沒開 captionBox 就什麼都不畫
+  const off = recordingCtx(1080, 1920)
+  drawChrome(s, t, off.ctx, { activeCaptionIndex: 1, captionBox: false, snapGuide: { x: false, y: false }, overlayGuides: false })
+  assert.equal(off.calls.filter(c => c.name === 'strokeRect').length, 0)
 }
 
 // 9. 字幕排版走注入的 measure：每字 10px，可用寬度 1080×0.78 = 842.4 → 84 字一行
@@ -279,17 +308,26 @@ function scene(over: Partial<Scene> = {}): Scene {
   assert.deepEqual(layersAt(scene({ points: [] }), 0, target), [])
 }
 
-// 20. timeOfPoint：以點定址的呼叫端換算成時間——停留區段的開頭
+// 20. timeOfPoint：鏡頭抵達該點的瞬間
 {
   const points = [
     point({ moveDuration: 1.2, holdDuration: 1.5 }),
     point({ moveDuration: .8, holdDuration: 2 }),
-    point({ moveDuration: 1, holdDuration: 0 }),   // 沒有停留 → 用移動的開頭
+    point({ moveDuration: 1, holdDuration: 0 }),   // 沒有停留
   ]
   assert.equal(timeOfPoint(points, 0), 1.2)
   assert.equal(timeOfPoint(points, 1), 1.2 + 1.5 + .8)
-  assert.equal(timeOfPoint(points, 2), 1.2 + 1.5 + .8 + 2, '沒有停留就落在移動起點')
+  assert.equal(timeOfPoint(points, 2), 1.2 + 1.5 + .8 + 2 + 1, '沒有停留時是移動段的結尾')
   assert.equal(timeOfPoint(points, 99), 0, '超出範圍回 0')
+
+  // 關鍵：在這個時間點解出來的鏡頭，必須就是該點自己的鏡頭，
+  // 停留時間為 0 也一樣（用移動起點的話會拿到前一個點的取景）
+  const s = scene({ points })
+  for (let i = 0; i < points.length; i++) {
+    const st = frameStateAt(s, timeOfPoint(points, i))
+    assert.equal(st?.pointIndex, i, `point ${i} 應該解到自己`)
+    assert.equal(st?.camera.zoom, points[i].zoom)
+  }
 }
 
 // 21. 縮圖：拿掉字幕／旁白／疊加圖，但馬賽克必須留著。
