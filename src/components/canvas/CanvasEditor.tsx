@@ -6,7 +6,7 @@ import {
 } from '@/lib/utils'
 import {
   fitImageRect, getViewBoxCanvas, getCameraSourceRect,
-  composeFrame, composeSourceView, drawChrome, timeOfPoint, drawCaptionSafeArea,
+  composeFrame, composeSourceView, drawChrome, timeOfPoint,
   getCaptionLayout, getAllCaptions,
   imageToCanvasPoint, canvasToImageRatio, type Scene
 } from '@/lib/canvas'

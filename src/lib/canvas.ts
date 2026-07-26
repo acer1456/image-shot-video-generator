@@ -77,7 +77,7 @@ export interface SubtitleLayout {
   strokeWidth: number
 }
 
-export function canvasTarget(ctx: CanvasRenderingContext2D, overlayRatio?: (overlay: ImageOverlay) => number): Target {
+function canvasTarget(ctx: CanvasRenderingContext2D, overlayRatio?: (overlay: ImageOverlay) => number): Target {
   return {
     width: ctx.canvas.width,
     height: ctx.canvas.height,
@@ -166,7 +166,7 @@ export function canvasToImageRatio(
   }
 }
 
-export function getCameraForPoint(image: { width: number; height: number }, p: CameraPoint): Camera {
+function getCameraForPoint(image: { width: number; height: number }, p: CameraPoint): Camera {
   return { cx: p.x * image.width, cy: p.y * image.height, zoom: p.zoom }
 }
 
@@ -348,7 +348,7 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
 }
 
 /** 把 layer 依序塗上去。所有幾何都已算好，這裡只做 canvas 呼叫。 */
-export function paint(layers: Layer[], ctx: CanvasRenderingContext2D, onOverlayLoad?: () => void) {
+function paint(layers: Layer[], ctx: CanvasRenderingContext2D, onOverlayLoad?: () => void) {
   const canvas = ctx.canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   for (const layer of layers) {
@@ -567,7 +567,7 @@ export async function convertScene(scene: Scene, mode: ChineseConversion): Promi
  * Greedily wraps words into lines that each fit within maxWidth.
  * No text deformation or font-size changes — lines simply break at word boundaries.
  */
-export function wrapWordsToLines(
+function wrapWordsToLines(
   words: string[],
   measure: Measure,
   font: string,
@@ -813,7 +813,7 @@ function drawSnapGuides(
   ctx.restore()
 }
 
-export function getTimelineStateAt(
+function getTimelineStateAt(
   image: { width: number; height: number },
   points: CameraPoint[],
   time: number
@@ -870,11 +870,10 @@ export function buildTimeline(points: CameraPoint[]) {
 }
 
 // Platform preview helpers
-export function pxX(canvas: HTMLCanvasElement, px: number) { return px / OUTPUT_W * canvas.width }
-export function pxY(canvas: HTMLCanvasElement, px: number) { return px / OUTPUT_H * canvas.height }
-export function pxS(canvas: HTMLCanvasElement, px: number) { return px / OUTPUT_W * canvas.width }
+function pxX(canvas: HTMLCanvasElement, px: number) { return px / OUTPUT_W * canvas.width }
+function pxY(canvas: HTMLCanvasElement, px: number) { return px / OUTPUT_H * canvas.height }
 
-export function drawCaptionSafeArea(
+function drawCaptionSafeArea(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   visibility: { ig: boolean; shorts: boolean; tiktok: boolean }
@@ -891,7 +890,7 @@ function drawUiScrim(ctx: CanvasRenderingContext2D, color: string, x: number, y:
 
 function drawTopLabel(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, text: string, color: string, x: number, y: number) {
   ctx.save()
-  ctx.font = `${pxS(canvas, 25)}px system-ui`
+  ctx.font = `${pxX(canvas, 25)}px system-ui`
   ctx.textBaseline = 'top'
   ctx.fillStyle = color
   ctx.fillText(text, x, y)
@@ -901,7 +900,7 @@ function drawTopLabel(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, 
 function drawBottomTextBlock(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, text: string, color: string, x: number, y: number, width: number) {
   ctx.save()
   ctx.fillStyle = color
-  ctx.font = `700 ${pxS(canvas, 25)}px system-ui`
+  ctx.font = `700 ${pxX(canvas, 25)}px system-ui`
   ctx.textBaseline = 'top'
   ctx.fillText(text, x, y)
   ctx.globalAlpha = 0.75
@@ -915,12 +914,12 @@ function drawRightActionRail(canvas: HTMLCanvasElement, ctx: CanvasRenderingCont
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.font = `700 ${pxS(canvas, 32)}px system-ui`
+  ctx.font = `700 ${pxX(canvas, 32)}px system-ui`
   icons.forEach((icon, i) => {
     const cy = y + i * pxY(canvas, 132)
     ctx.fillStyle = 'rgba(0,0,0,.28)'
     ctx.beginPath()
-    ctx.arc(x, cy, pxS(canvas, 42), 0, Math.PI * 2)
+    ctx.arc(x, cy, pxX(canvas, 42), 0, Math.PI * 2)
     ctx.fill()
     ctx.fillStyle = color
     ctx.fillText(icon, x, cy)

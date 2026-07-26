@@ -52,27 +52,6 @@ export function getOverlayCanvasRect(
   return { x: overlay.x * canvas.width - w / 2, y: overlay.y * canvas.height - h / 2, w, h }
 }
 
-export function drawOverlays(
-  canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D,
-  overlays: ImageOverlay[],
-  time: number,
-  options?: { guides?: boolean; onImageLoad?: () => void },
-) {
-  for (const overlay of overlays) {
-    if (!isOverlayActiveAt(overlay, time)) continue
-    const img = getOverlayImage(overlay, options?.onImageLoad)
-    const rect = getOverlayCanvasRect(canvas, overlay)
-    if (img) {
-      ctx.save()
-      ctx.globalAlpha = clamp(overlay.opacity, 0, 1)
-      ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h)
-      ctx.restore()
-    }
-    if (options?.guides) paintOverlayGuides(ctx, rect)
-  }
-}
-
 export function paintOverlayGuides(
   ctx: CanvasRenderingContext2D,
   rect: { x: number; y: number; w: number; h: number },

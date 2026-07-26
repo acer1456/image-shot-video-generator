@@ -9,7 +9,6 @@ export const OUTPUT_W = 1080
 export const OUTPUT_H = 1920
 export const OUTPUT_RATIO = OUTPUT_W / OUTPUT_H
 export const DEFAULT_FONT = 'Noto Sans TC, Microsoft JhengHei, sans-serif'
-export const TIMELINE_PX_PER_SECOND = 92
 
 export function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
