@@ -19,6 +19,9 @@ export default defineConfig({
       workbox: {
         maximumFileSizeToCacheInBytes: 30 * 1024 * 1024, // 30 MiB — covers WASM + kokoro bundle
         navigateFallbackDenylist: isPreviewBuild ? [] : [/\/preview\//],
+        // ONNX runtime + transformers 只有在使用者上傳旁白音訊做強制對齊時才會動態載入。
+        // 不排除的話 precache 會從 ~2MB 膨脹到 ~24MB，每個人首次開啟都得先下載。
+        globIgnores: ['**/tts-*.js', '**/*.wasm'],
       },
       manifest: {
         name: '畫作鏡頭影片產生器',

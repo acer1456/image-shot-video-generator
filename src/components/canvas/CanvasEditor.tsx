@@ -84,6 +84,10 @@ export default function CanvasEditor({
   const captionDragPreviewRef = useRef<CaptionDragPreview | null>(null)
   const captionDragFrameRef = useRef<number | null>(null)
   const mosaicStrokeRef = useRef<MosaicStroke | null>(null)
+  // 疊加圖拖曳／縮放：合併到每個動畫幀套一次。React onPointerMove 不會合併原生事件，
+  // 高頻指標裝置一幀內可觸發數十次；若每次都 setState + 全幅重繪會塞爆主執行緒導致當機。
+  const overlayDragFrameRef = useRef<number | null>(null)
+  const overlayDragPatchRef = useRef<{ id: string; patch: Partial<ImageOverlay> } | null>(null)
   const { resolvedTheme } = useTheme()
 
   const getCssVar = useCallback((name: string, fallback: string) => {
@@ -228,8 +232,19 @@ export default function CanvasEditor({
     })
   }, [drawCaptionDragPreview])
 
+  const scheduleOverlayDrag = useCallback((id: string, patch: Partial<ImageOverlay>) => {
+    overlayDragPatchRef.current = { id, patch }
+    if (overlayDragFrameRef.current != null) return
+    overlayDragFrameRef.current = requestAnimationFrame(() => {
+      overlayDragFrameRef.current = null
+      const pending = overlayDragPatchRef.current
+      if (pending) onOverlayChange?.(pending.id, pending.patch)
+    })
+  }, [onOverlayChange])
+
   useEffect(() => () => {
     if (captionDragFrameRef.current != null) cancelAnimationFrame(captionDragFrameRef.current)
+    if (overlayDragFrameRef.current != null) cancelAnimationFrame(overlayDragFrameRef.current)
   }, [])
 
   const drawEditorGuides = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
@@ -597,14 +612,14 @@ export default function CanvasEditor({
       const overlay = imageOverlays.find(o => o.id === drag.overlayId)
       if (!overlay) return
       if (drag.type === 'overlayMove') {
-        onOverlayChange(overlay.id, {
+        scheduleOverlayDrag(overlay.id, {
           x: clamp((pos.x - (drag.offsetX ?? 0)) / canvas.width, 0, 1),
           y: clamp((pos.y - (drag.offsetY ?? 0)) / canvas.height, 0, 1),
         })
       } else {
         // 以中心到指標的水平距離推導寬度
         const halfW = Math.abs(pos.x - overlay.x * canvas.width)
-        onOverlayChange(overlay.id, { scale: clamp(halfW * 2 / canvas.width, 0.05, 1.5) })
+        scheduleOverlayDrag(overlay.id, { scale: clamp(halfW * 2 / canvas.width, 0.05, 1.5) })
       }
       return
     }

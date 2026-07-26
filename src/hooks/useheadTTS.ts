@@ -84,7 +84,7 @@ function cloneStyle() {
   }
 }
 
-function wordEndsSentence(word: string) {
+export function wordEndsSentence(word: string) {
   return /[.!?;:]$/.test(word.trim())
 }
 
@@ -178,6 +178,7 @@ let measureCtx: CanvasRenderingContext2D | null = null
 
 function getSubtitleMeasureContext() {
   if (measureCtx) return measureCtx
+  if (typeof document === 'undefined') return null  // 非瀏覽器環境（測試）走字數 fallback
   const canvas = document.createElement('canvas')
   canvas.width = OUTPUT_W
   canvas.height = 1
@@ -185,7 +186,7 @@ function getSubtitleMeasureContext() {
   return measureCtx
 }
 
-function fitsSubtitleWidth(text: string) {
+export function fitsSubtitleWidth(text: string) {
   const ctx = getSubtitleMeasureContext()
   if (!ctx) return text.length <= 34
   const fontSize = Math.round(OUTPUT_W * DEFAULT_SUBTITLE_STYLE.fontSizeRatio)
@@ -194,7 +195,7 @@ function fitsSubtitleWidth(text: string) {
   return ctx.measureText(text).width <= OUTPUT_W - sidePadding * 2
 }
 
-function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[]): SubtitleCue[] {
+export function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[]): SubtitleCue[] {
   const cues: SubtitleCue[] = []
   const maxWords = 3.5
   const maxDuration = 3.2

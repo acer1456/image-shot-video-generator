@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowDown, ArrowLeft, ArrowLeftRight, ArrowRight, ArrowUp, Camera,
-  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal,
+  ChevronLeft, ChevronRight, FileText, Languages, Loader2, Mic, Pause, Play, SlidersHorizontal, Upload,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,7 +17,9 @@ import {
   type NarrationAIMode,
   type NarrationAIStoryResult,
 } from '@/components/panel/NarrationAIPanel'
-import { applyNarrationLineTranslations, createNarrationMixdown, getNarrationDuration, parseNarrationInput } from '@/lib/narration'
+import { applyNarrationLineTranslations, buildAudioOnlyNarration, buildUploadedNarration, createNarrationMixdown, getNarrationDuration, parseNarrationInput, shiftSubtitleCues } from '@/lib/narration'
+import { decodeAudioFile } from '@/lib/audioCodec'
+import { getCtcEmissions } from '@/lib/asr'
 
 const FONT_OPTIONS = [
   { value: "Georgia, 'Times New Roman', serif", label: 'Georgia（Classic 襯線）' },
@@ -123,6 +125,9 @@ export function NarrationSidebar({
   const [pauseIntensity, setPauseIntensity] = useState(clampPauseIntensity(track?.pauseIntensity ?? 1))
   const [playing, setPlaying] = useState(false)
   const [showPrompt, setShowPrompt] = useState(() => !inputText.trim())
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadStatus, setUploadStatus] = useState('')
+  const [subtitleOffset, setSubtitleOffset] = useState(0)
   const [showSubtitleStyle, setShowSubtitleStyle] = useState(false)
   const [aiPanelMode, setAiPanelMode] = useState<NarrationAIMode | null>(null)
   const [isTranslating, setIsTranslating] = useState(false)
@@ -195,6 +200,55 @@ export function NarrationSidebar({
       // useheadTTS owns the visible status text.
     }
   }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, pauseIntensity, releasePlaybackAudio, speed, subtitleCues.length, voice])
+
+  const handleUploadAudio = useCallback(async (file: File) => {
+    const trimmed = inputText.trim()
+    if (!trimmed || uploadStatus) return
+    setUploadError(null)
+    releasePlaybackAudio()
+    let audioData: Float32Array
+    let sampleRate: number
+    try {
+      setUploadStatus('讀取音訊…')
+      const decoded = await decodeAudioFile(file)
+      audioData = decoded.audioData
+      sampleRate = decoded.sampleRate
+    } catch {
+      setUploadStatus('')
+      setUploadError('音訊解碼失敗，請改用 mp3 / wav / m4a')
+      return
+    }
+    try {
+      // 已有字幕：只放入音訊，不辨識、不動現有字幕
+      if (subtitleCues.length > 0) {
+        setUploadStatus('載入音訊…')
+        onTrackChange(buildAudioOnlyNarration(trimmed, audioData, sampleRate, subtitleCues))
+        setShowPrompt(false)
+        return
+      }
+      const ctc = await getCtcEmissions(audioData, sampleRate, (stage, ratio) => {
+        setUploadStatus(stage === 'model'
+          ? `下載對齊模型… ${Math.round(ratio * 100)}%`
+          : `分析音訊… ${Math.round(ratio * 100)}%`)
+      })
+      const { track: uploaded, cues, score } = buildUploadedNarration(trimmed, audioData, sampleRate, ctc)
+      onTrackChange(uploaded)
+      onSubtitleCuesChange(cues)
+      onActiveSubtitleIdChange(cues[0]?.id ?? null)
+      setShowPrompt(false)
+      setSubtitleOffset(0)
+      // 門檻由 ctcAlign.probe.mts 在真實語音上實測校準：
+      // 稿子正確 ≈ -0.72，稿子完全不符 ≈ -2.88。取 -2 可清楚分開兩者。
+      if (score < -2) {
+        setUploadError('音訊與稿子對不太起來，字幕時間可能不準 —— 請確認兩者內容一致')
+      }
+    } catch {
+      // 不靜默退回估算時間：那正是使用者說「差太多、等於要大改」的結果
+      setUploadError('對齊失敗，請確認網路連線後重試')
+    } finally {
+      setUploadStatus('')
+    }
+  }, [inputText, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, releasePlaybackAudio, subtitleCues, uploadStatus])
 
   const handlePlayPause = useCallback(() => {
     if (!track) return
@@ -462,6 +516,21 @@ export function NarrationSidebar({
               </Button>
             )}
           </div>
+          <label className={`text-xs flex items-center justify-center gap-1.5 rounded-md border border-input px-2 py-1.5 transition-colors ${inputText.trim() && !isGenerating && !uploadStatus ? 'cursor-pointer hover:bg-muted' : 'opacity-50 pointer-events-none'}`}>
+            <Upload className="h-3.5 w-3.5" />
+            {uploadStatus || '上傳旁白音訊，自動對齊字幕'}
+            <input
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={e => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) void handleUploadAudio(file)
+              }}
+            />
+          </label>
+          {uploadError && <span className="text-[10px] text-destructive">{uploadError}</span>}
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
               <label className="text-xs text-muted-foreground">語速</label>
@@ -509,6 +578,29 @@ export function NarrationSidebar({
           </p>
         ) : (
           <>
+            <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold text-muted-foreground">字幕整體時間微調</label>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {subtitleOffset > 0 ? '+' : ''}{subtitleOffset.toFixed(2)}s
+                </span>
+              </div>
+              <Slider
+                min={-100} max={100} step={5}
+                value={Math.round(subtitleOffset * 100)}
+                onChange={v => {
+                  // 只套用差值，滑桿因此可自由來回而不累積；實際位移由下限夾過後回報
+                  const { cues, applied } = shiftSubtitleCues(subtitleCues, v / 100 - subtitleOffset)
+                  if (!applied) return
+                  onSubtitleCuesChange(cues)
+                  setSubtitleOffset(subtitleOffset + applied)
+                }}
+              />
+              <span className="text-[10px] text-muted-foreground opacity-70">
+                字幕整體偏早就往右拉。個別句子仍可在時間軸上拖。
+              </span>
+            </div>
+
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-2">
               <div className="flex items-center gap-1">
                 <div className="flex-1 min-w-0">

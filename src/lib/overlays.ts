@@ -20,6 +20,13 @@ export function getOverlayImage(overlay: ImageOverlay, onLoad?: () => void): HTM
   return entry.loaded ? entry.img : null
 }
 
+// 只保留仍存在的疊加圖快取項；其餘（已刪除／已換圖）連同已解碼圖片一併釋放。
+export function pruneOverlayImageCache(keepIds: Set<string>) {
+  for (const id of overlayImageCache.keys()) {
+    if (!keepIds.has(id)) overlayImageCache.delete(id)
+  }
+}
+
 export function isOverlayActiveAt(overlay: ImageOverlay, time: number) {
   return time >= overlay.startTime && time < overlay.startTime + overlay.duration
 }

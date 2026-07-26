@@ -17,7 +17,7 @@ import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
 import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
-import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
+import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
@@ -66,6 +66,21 @@ function AppInner() {
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
+
+  // 疊加圖被刪除後，釋放其在模組快取中殘留的已解碼圖片（否則反覆新增/刪除會使記憶體無上限成長）
+  useEffect(() => {
+    pruneOverlayImageCache(new Set(imageOverlays.map(o => o.id)))
+  }, [imageOverlays])
+
+  // __DEBUG_HEAP__ 臨時：拖曳疊加圖時每秒印出 JS heap，確認是否有殘留成長。確認後即刪。
+  useEffect(() => {
+    const id = setInterval(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mem = (performance as any).memory
+      if (mem) console.log('[HEAP]', Math.round(mem.usedJSHeapSize / 1048576), 'MB  overlays:', imageOverlays.length)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [imageOverlays.length])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
