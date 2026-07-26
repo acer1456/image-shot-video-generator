@@ -34,6 +34,8 @@ export interface Target {
 
 /** 已解出的一格畫面內容——不含時間，不含 store，不含 React。 */
 export interface FrameState {
+  /** 這個時間點落在哪一個鏡頭點上；預覽用它同步選取狀態。 */
+  pointIndex: number
   image: SourceImage
   background: BackgroundSettings
   camera: Camera
@@ -412,6 +414,7 @@ export function drawCamera(
   showMosaic = true
 ) {
   const state: FrameState = {
+    pointIndex: 0,
     image: { width: image.width, height: image.height, source: image },
     background: bg,
     camera,
@@ -499,6 +502,7 @@ export function frameStateAt(scene: Scene, t: number, chrome?: FrameState['chrom
   const cue = getActiveSubtitleCue(scene.cues, t)
   const text = getSubtitleRenderText(cue)
   return {
+    pointIndex: timeline.pointIndex,
     image,
     background: scene.background,
     camera: timeline.camera,
@@ -515,16 +519,21 @@ export function layersAt(scene: Scene, t: number, target: Target, chrome?: Frame
   return state ? layersFor(state, target) : []
 }
 
-/** 匯出／預覽都走這一支。沒有鏡頭點時不動畫布，維持原本 drawFrame 的行為。 */
+/**
+ * 匯出／預覽都走這一支。沒有鏡頭點時不動畫布，維持原本 drawFrame 的行為。
+ * 回傳畫出來的 FrameState，呼叫端若需要 pointIndex 之類的資訊可以直接拿，
+ * 不必再解一次時間軸。
+ */
 export function composeFrame(
   scene: Scene,
   t: number,
   ctx: CanvasRenderingContext2D,
   chrome?: FrameState['chrome'],
-) {
+): FrameState | null {
   const state = frameStateAt(scene, t, chrome)
-  if (!state) return
+  if (!state) return null
   paint(layersFor(state, canvasTarget(ctx, getOverlayRatio)), ctx)
+  return state
 }
 
 /** 匯出時才做的繁簡轉換：Scene 進、Scene 出，所以預覽與匯出的差別就是這一行。 */

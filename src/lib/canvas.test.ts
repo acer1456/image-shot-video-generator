@@ -4,7 +4,7 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import { frameStateAt, layersAt, layersFor, sceneDuration, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
 import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
@@ -37,6 +37,7 @@ const stroke: MosaicStroke = { id: 's1', brushSize: 40, points: [{ x: 0.25, y: 0
 
 function state(over: Partial<FrameState> = {}): FrameState {
   return {
+    pointIndex: 0,
     // 4000×3000 的來源圖，source 在排版階段完全用不到
     image: { width: 4000, height: 3000, source: null as never },
     background: { mode: 'color', color: '#000000', blur: 0 },
@@ -347,6 +348,21 @@ function scene(over: Partial<Scene> = {}): Scene {
   assert.ok(img.dest.x > 0 && img.dest.w < 1080, '左右留白')
   assert.equal(img.dest.y, 0)
   assert.equal(img.dest.h, 1920, '高度滿版')
+}
+
+// 25. frameStateAt 回報目前落在哪一個鏡頭點——預覽用它同步選取，
+//     不必自己再解一次時間軸。
+{
+  const s = scene({ points: [
+    point({ moveDuration: 1, holdDuration: 2 }),   // 0..3
+    point({ moveDuration: 1, holdDuration: 2 }),   // 3..6
+  ] })
+  const idxAt = (t: number) => frameStateAt(s, t)?.pointIndex
+  assert.equal(idxAt(0), 0)
+  assert.equal(idxAt(2.9), 0)
+  assert.equal(idxAt(3.5), 1)
+  assert.equal(idxAt(99), 1, '超過長度後停在最後一點')
+  assert.equal(frameStateAt(scene({ image: null }), 0), null, '沒有圖片就沒有畫面')
 }
 
 console.log('canvas layers self-check passed')

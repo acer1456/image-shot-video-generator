@@ -19,11 +19,7 @@ import { useVideoRender } from '@/hooks/useVideoRender'
 import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
-import {
-  drawCamera as doDrawCamera,
-  getTimelineStateAt,
-  sceneDuration, timeOfPoint, type Scene,
-} from '@/lib/canvas'
+import { composeFrame, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
@@ -220,17 +216,19 @@ function AppInner() {
 
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
     const canvas = getCanvas()
-    if (!canvas || !store.image) return
+    if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const state = getTimelineStateAt(store.image, store.points, time)
-    if (!state) return
-    store.setActiveIndex(state.pointIndex)
-    const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
-    const narrationText = getSubtitleRenderText(cue)
-    const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false, mosaicStrokes, showMosaicInOutput)
-  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays, mosaicStrokes, showMosaicInOutput])
+    // 與匯出完全同一支呼叫，只多了編輯輔助線
+    const state = composeFrame(scene, time, ctx, {
+      includeGuides: guides && store.showCaptionBox,
+      showCaptionBox: store.showCaptionBox,
+      activeCaptionIndex: 0,
+      snapGuide,
+      overlayGuides: false,
+    })
+    if (state) store.setActiveIndex(state.pointIndex)
+  }, [getCanvas, scene, store, snapGuide])
 
   const getPointFocusTime = useCallback(
     (pointIndex: number) => timeOfPoint(store.points, pointIndex),
