@@ -1,5 +1,5 @@
-// 手動跑：npx tsx --tsconfig tsconfig.app.json src/lib/ctcAlign.test.ts
-// ponytail: assert-based self-check，不裝測試框架
+// 跑法：npm test（會掃 src/**/*.test.ts）
+// ponytail: assert-based self-check，用 node 內建 test runner，不裝測試框架
 import assert from 'node:assert'
 import { alignWordsCtc, viterbiAlign, type CtcVocab } from './ctcAlign'
 
