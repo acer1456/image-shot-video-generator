@@ -140,15 +140,10 @@ function computeCaptionLayout(
   const textMaxW = baseTextMaxW * boxScaleX
   const mainLines = wrapText(ctx, cap.text || '', textMaxW, `800 ${mainSize}px ${fontFamily}`)
   const subLines = wrapText(ctx, cap.subtitle || '', textMaxW, `650 ${subSize}px ${subtitleFontFamily}`)
-  const mainW = mainLines.length ? Math.max(...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`))) : 0
-  const subW = subLines.length ? Math.max(...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) : 0
-  void mainW; void subW
   const gap = mainLines.length && subLines.length ? pxS(canvas, 18) * cap.scale : 0
   const textH = mainLines.length * mainLine + gap + subLines.length * subLine
   const padX = pxS(canvas, 38) * cap.scale
   const padY = pxS(canvas, 24) * cap.scale
-  const baseW = Math.max(pxS(canvas, 240), ...mainLines.map(l => measureText(ctx, l, `800 ${mainSize}px ${fontFamily}`)), ...subLines.map(l => measureText(ctx, l, `650 ${subSize}px ${subtitleFontFamily}`))) + padX * 2
-  void baseW
   const baseH = Math.max(pxS(canvas, 70), textH + padY * 2)
   const width = Math.min(canvas.width * 0.94, Math.max(baseTextMaxW * boxScaleX + padX * 2, pxS(canvas, 240) + padX * 2))
   const height = Math.min(canvas.height * 0.5, baseH * (cap.boxScaleY || 1))
