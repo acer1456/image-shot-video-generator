@@ -5,49 +5,54 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── NLE 風格設計 tokens ──
+     淺色：中性淺灰工作區 + 白色面板；深色：中性深灰（去藍調），
+     接近專業剪輯軟體的工作區配色。 */
+  /* ── CapCut / IG Edits 風格 tokens ──
+     近黑畫布為主角、柔和低對比邊框、大圓角、單一青藍亮點色。 */
   :root {
-    --background: 210 40% 98%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 220 12% 96%;
+    --foreground: 228 12% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 228 12% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --popover-foreground: 228 12% 10%;
+    --primary: 202 100% 48%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 12% 95%;
+    --secondary-foreground: 228 12% 16%;
+    --muted: 220 12% 93%;
+    --muted-foreground: 224 8% 46%;
+    --accent: 220 12% 92%;
+    --accent-foreground: 228 12% 12%;
+    --destructive: 0 78% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 10% 89%;
+    --input: 220 10% 87%;
+    --ring: 202 100% 48%;
+    --radius: 0.75rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 217.2 32.6% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --background: 240 5% 4%;
+    --foreground: 220 10% 94%;
+    --card: 240 4% 9%;
+    --card-foreground: 220 10% 94%;
+    --popover: 240 4% 8%;
+    --popover-foreground: 220 10% 94%;
+    --primary: 194 100% 55%;
+    --primary-foreground: 240 6% 6%;
+    --secondary: 240 4% 14%;
+    --secondary-foreground: 220 10% 90%;
+    --muted: 240 4% 14%;
+    --muted-foreground: 228 6% 58%;
+    --accent: 240 4% 17%;
+    --accent-foreground: 220 10% 94%;
+    --destructive: 0 68% 52%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 14%;
+    --input: 240 4% 17%;
+    --ring: 194 100% 55%;
   }
 }
 
@@ -102,23 +107,55 @@
 }
 .timeline-editor-action {
   background-color: transparent !important;
+  transition: box-shadow 120ms ease, filter 120ms ease;
 }
+/* hover / 拖曳中：明顯的外框與亮度回饋 */
+.timeline-editor-action:hover {
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,.55);
+  filter: brightness(1.08);
+  z-index: 5;
+}
+/* ── 左右伸縮把手：更寬的熱區 + 永遠可見的把手條 ── */
 .timeline-editor-action .timeline-editor-action-left-stretch,
 .timeline-editor-action .timeline-editor-action-right-stretch {
-  width: 18px !important;
-  z-index: 4;
+  width: 26px !important;
+  z-index: 6;
+  cursor: ew-resize !important;
 }
 .timeline-editor-action .timeline-editor-action-left-stretch {
-  left: -4px !important;
+  left: -8px !important;
 }
 .timeline-editor-action .timeline-editor-action-right-stretch {
-  right: -4px !important;
+  right: -8px !important;
 }
-.timeline-editor-action .timeline-editor-action-left-stretch:hover:after {
-  border-left-color: rgba(255,255,255,.45) !important;
+/* 覆蓋套件預設的三角形箭頭，改成圓角把手條 */
+.timeline-editor-action .timeline-editor-action-left-stretch:after,
+.timeline-editor-action .timeline-editor-action-right-stretch:after {
+  content: '' !important;
+  position: absolute !important;
+  top: 22% !important;
+  height: 56% !important;
+  width: 4px !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,.28);
+  transition: background 120ms ease, transform 120ms ease;
 }
+.timeline-editor-action .timeline-editor-action-left-stretch:after {
+  left: 11px !important;
+}
+.timeline-editor-action .timeline-editor-action-right-stretch:after {
+  right: 11px !important;
+  left: auto !important;
+}
+.timeline-editor-action:hover .timeline-editor-action-left-stretch:after,
+.timeline-editor-action:hover .timeline-editor-action-right-stretch:after {
+  background: rgba(255,255,255,.75);
+}
+.timeline-editor-action .timeline-editor-action-left-stretch:hover:after,
 .timeline-editor-action .timeline-editor-action-right-stretch:hover:after {
-  border-right-color: rgba(255,255,255,.45) !important;
+  background: #ffffff !important;
+  transform: scaleY(1.15);
 }
 .timeline-editor-edit-area .ReactVirtualized__Grid::-webkit-scrollbar-thumb {
   background: hsl(var(--border)) !important;

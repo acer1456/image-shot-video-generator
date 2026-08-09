@@ -1,15 +1,15 @@
 import { useCallback, useState } from 'react'
-import { Muxer, ArrayBufferTarget } from 'webm-muxer'
+import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer'
+import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer'
 import type { AppStore } from '@/hooks/useAppStore'
 import { buildTimeline, drawCamera as doDrawCamera, getTimelineStateAt } from '@/lib/canvas'
 import { OUTPUT_W, OUTPUT_H, sanitizeFileName, getTodayString, wait } from '@/lib/utils'
 import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from '@/lib/chinese'
-import type { NarrationTrack, SubtitleCue } from '@/types'
+import type { ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
 import {
   createNarrationMixdown,
   getActiveSubtitleCue,
   getNarrationDuration,
-  getNarrationFrameSample,
   getNarrationSampleRate,
   getSubtitleRenderText,
   hasNarrationAudio,
@@ -28,6 +28,7 @@ interface UseVideoRenderOptions {
   triggerRedraw: () => void
   narrationTrack: NarrationTrack | null
   subtitleCues: SubtitleCue[]
+  imageOverlays?: ImageOverlay[]
   showNarration: boolean
   showCameraCaptions: boolean
 }
@@ -79,6 +80,7 @@ export function useVideoRender({
   triggerRedraw,
   narrationTrack,
   subtitleCues,
+  imageOverlays = [],
   showNarration,
   showCameraCaptions,
 }: UseVideoRenderOptions) {
@@ -104,7 +106,8 @@ export function useVideoRender({
       const renderNarrationTrack = showNarration ? narrationTrack : null
       const narrationEnd = renderNarrationTrack ? renderNarrationTrack.startTime + getNarrationDuration(renderNarrationTrack) : 0
       const subtitleEnd = renderSubtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
-      const renderDuration = Math.max(td, narrationEnd, subtitleEnd)
+      const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
+      const renderDuration = Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
       const totalFrames = Math.ceil(renderDuration * RENDER_FPS) + 1
 
       // Dedicated offscreen canvas — completely isolated from the editor canvas.
@@ -129,9 +132,9 @@ export function useVideoRender({
         const cue = getActiveSubtitleCue(renderSubtitleCues, t)
         const narText = getSubtitleRenderText(cue) || undefined
         const captionPoint = showCameraCaptions ? state.captionPoint : null
-        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+        doDrawCamera(off, offCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false)
         if (editorCanvas && editorCtx) {
-          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style)
+          doDrawCamera(editorCanvas, editorCtx, store.image!, state.camera, store.backgroundSettings, captionPoint, false, false, { x: false, y: false }, 0, narText, cue?.style, imageOverlays, t, false)
         }
       }
 
@@ -150,12 +153,13 @@ export function useVideoRender({
       document.body.appendChild(a); a.click(); a.remove()
     } catch (err) {
       console.error(err)
-      alert('影片產生失敗，請打開 Console 查看錯誤。')
+      const detail = err instanceof Error ? err.message : String(err)
+      alert(`影片產生失敗：${detail}`)
     } finally {
       store.setIsRendering(false)
       triggerRedraw()
     }
-  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues, showNarration, showCameraCaptions])
+  }, [store, getCanvas, triggerRedraw, narrationTrack, subtitleCues, imageOverlays, showNarration, showCameraCaptions])
 
   return { renderVideo, renderProgress }
 }
@@ -268,25 +272,47 @@ async function renderWithWebCodecs(
     throw new Error('此瀏覽器不支援 WebCodecs AudioEncoder，請改用 MediaRecorder 輸出含旁白影片。')
   }
 
-  const target = new ArrayBufferTarget()
-  const muxer = new Muxer({
-    target,
-    video: {
-      codec: 'V_VP8',
+  const needAudio = hasNarrationAudio(narrationTrack)
+  const sampleRate = needAudio ? getNarrationSampleRate(narrationTrack)! : 0
+
+  // 優先輸出 H.264/MP4（相容性最好）；瀏覽器不支援 AVC 或 AAC 時退回 VP8/WebM。
+  const format = await probeWebCodecsFormat(VideoEncoderCtor, AudioEncoderCtor, needAudio, sampleRate)
+
+  const config = format === 'mp4'
+    ? {
+      codec: 'avc1.640028', // High Profile Level 4.0 — 涵蓋 1080×1920@30
       width: OUTPUT_W,
       height: OUTPUT_H,
-      frameRate: RENDER_FPS,
-    },
-    ...(hasNarrationAudio(narrationTrack)
-      ? {
-        audio: {
-          codec: 'A_OPUS',
-          numberOfChannels: 1,
-          sampleRate: getNarrationSampleRate(narrationTrack)!,
-        },
-      }
-      : {}),
-  })
+      framerate: RENDER_FPS,
+      bitrate: 8_000_000,
+      avc: { format: 'avc' as const },
+    }
+    : {
+      codec: 'vp8',
+      width: OUTPUT_W,
+      height: OUTPUT_H,
+      framerate: RENDER_FPS,
+      bitrate: 8_000_000,
+    }
+
+  if (format === 'webm' && typeof VideoEncoderCtor.isConfigSupported === 'function') {
+    const support = await VideoEncoderCtor.isConfigSupported(config)
+    if (!support.supported) throw new Error('此瀏覽器不支援 WebCodecs 影片編碼，請改用 MediaRecorder。')
+  }
+
+  const target = format === 'mp4' ? new Mp4ArrayBufferTarget() : new WebmArrayBufferTarget()
+  const muxer = format === 'mp4'
+    ? new Mp4Muxer({
+      target: target as Mp4ArrayBufferTarget,
+      fastStart: 'in-memory',
+      video: { codec: 'avc', width: OUTPUT_W, height: OUTPUT_H, frameRate: RENDER_FPS },
+      ...(needAudio ? { audio: { codec: 'aac' as const, numberOfChannels: 1, sampleRate } } : {}),
+    })
+    : new WebmMuxer({
+      target: target as WebmArrayBufferTarget,
+      video: { codec: 'V_VP8', width: OUTPUT_W, height: OUTPUT_H, frameRate: RENDER_FPS },
+      ...(needAudio ? { audio: { codec: 'A_OPUS', numberOfChannels: 1, sampleRate } } : {}),
+    })
   const errors: Error[] = []
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let encoder: any | null = new VideoEncoderCtor({
@@ -299,26 +325,14 @@ async function renderWithWebCodecs(
   let audioEncodeController: { encodeUntil: (timeSeconds: number) => Promise<void> } | null = null
   const reportProgress = createProgressReporter(setRenderProgress)
 
-  const config = {
-    codec: 'vp8',
-    width: OUTPUT_W,
-    height: OUTPUT_H,
-    framerate: RENDER_FPS,
-    bitrate: 8_000_000,
-  }
-
-  if (typeof VideoEncoderCtor.isConfigSupported === 'function') {
-    const support = await VideoEncoderCtor.isConfigSupported(config)
-    if (!support.supported) throw new Error('此瀏覽器不支援 VP8 WebCodecs 編碼。')
-  }
-  if (hasNarrationAudio(narrationTrack)) {
+  if (needAudio) {
     const audioConfig = {
-      codec: 'opus',
-      sampleRate: getNarrationSampleRate(narrationTrack)!,
+      codec: format === 'mp4' ? 'mp4a.40.2' : 'opus',
+      sampleRate,
       numberOfChannels: 1,
       bitrate: 96_000,
     }
-    if (typeof AudioEncoderCtor.isConfigSupported === 'function') {
+    if (format === 'webm' && typeof AudioEncoderCtor.isConfigSupported === 'function') {
       const support = await AudioEncoderCtor.isConfigSupported(audioConfig)
       if (!support.supported) throw new Error('此瀏覽器不支援 Opus WebCodecs 音訊編碼，請改用 MediaRecorder。')
     }
@@ -363,10 +377,46 @@ async function renderWithWebCodecs(
   }
 
   muxer.finalize()
-  const mimeType = hasNarrationAudio(narrationTrack) ? 'video/webm;codecs=vp8,opus' : 'video/webm;codecs=vp8'
+  const mimeType = format === 'mp4'
+    ? (needAudio ? 'video/mp4;codecs=avc1,mp4a' : 'video/mp4;codecs=avc1')
+    : (needAudio ? 'video/webm;codecs=vp8,opus' : 'video/webm;codecs=vp8')
   return {
     blob: new Blob([target.buffer], { type: mimeType }),
     mimeType,
+  }
+}
+
+async function probeWebCodecsFormat(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  VideoEncoderCtor: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  AudioEncoderCtor: any,
+  needAudio: boolean,
+  sampleRate: number,
+): Promise<'mp4' | 'webm'> {
+  try {
+    if (typeof VideoEncoderCtor.isConfigSupported !== 'function') return 'webm'
+    const video = await VideoEncoderCtor.isConfigSupported({
+      codec: 'avc1.640028',
+      width: OUTPUT_W,
+      height: OUTPUT_H,
+      framerate: RENDER_FPS,
+      bitrate: 8_000_000,
+      avc: { format: 'avc' },
+    })
+    if (!video.supported) return 'webm'
+    if (needAudio) {
+      const audio = await AudioEncoderCtor?.isConfigSupported?.({
+        codec: 'mp4a.40.2',
+        sampleRate,
+        numberOfChannels: 1,
+        bitrate: 96_000,
+      })
+      if (!audio?.supported) return 'webm'
+    }
+    return 'mp4'
+  } catch {
+    return 'webm'
   }
 }
 
@@ -381,6 +431,8 @@ function createNarrationAudioEncodeController(
   const sampleRate = getNarrationSampleRate(track)!
   const framesPerChunk = Math.max(1, Math.round(sampleRate * OPUS_FRAME_MS / 1000))
   const totalAudioFrames = Math.ceil(Math.min(totalDuration, track.startTime + getNarrationDuration(track)) * sampleRate)
+  // 一次性混音，避免逐 sample 呼叫函式（60 秒旁白 ≈ 144 萬次呼叫）
+  const mixdownData = createNarrationMixdown(track)?.audioData ?? new Float32Array(0)
   let frameOffset = 0
 
   return {
@@ -389,9 +441,8 @@ function createNarrationAudioEncodeController(
       while (frameOffset < targetFrame) {
         const frameCount = Math.min(framesPerChunk, targetFrame - frameOffset)
         const samples = new Float32Array(frameCount)
-        for (let i = 0; i < frameCount; i++) {
-          samples[i] = getNarrationFrameSample(track, frameOffset + i, sampleRate)
-        }
+        const available = Math.max(0, Math.min(frameCount, mixdownData.length - frameOffset))
+        if (available > 0) samples.set(mixdownData.subarray(frameOffset, frameOffset + available))
         const audioData = new AudioDataCtor({
           format: 'f32-planar',
           sampleRate,

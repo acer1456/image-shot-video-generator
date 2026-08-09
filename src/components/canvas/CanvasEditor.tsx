@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react'
-import type { CameraPoint, BackgroundSettings, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
+import type { CameraPoint, BackgroundSettings, ImageOverlay, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
+import { drawOverlays, findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
 import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
@@ -46,6 +47,9 @@ interface CanvasEditorProps {
   narrationText?: string
   subtitleStyle?: SubtitleStyle
   onSubtitlePositionChange?: (pos: { x: number; y: number }) => void
+  imageOverlays?: ImageOverlay[]
+  overlaysLocked?: boolean
+  onOverlayChange?: (id: string, patch: Partial<ImageOverlay>) => void
 }
 
 interface CaptionDragPreview {
@@ -67,8 +71,10 @@ export default function CanvasEditor({
   onPointDelete, onEnterCaption, onBackToCamera,
   activeCaptionIndex = 0, onCaptionSelect,
   narrationText, subtitleStyle, onSubtitlePositionChange,
+  imageOverlays = [], overlaysLocked = false, onOverlayChange,
 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const drawBaseRef = useRef<(() => void) | null>(null)
   const captionDragPreviewRef = useRef<CaptionDragPreview | null>(null)
   const captionDragFrameRef = useRef<number | null>(null)
   const { resolvedTheme } = useTheme()
@@ -97,8 +103,8 @@ export default function CanvasEditor({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const isDark = resolvedTheme === 'dark'
-    const canvasBg = isDark ? '#030712' : '#f1f5f9'
-    const textMuted = isDark ? '#94a3b8' : '#64748b'
+    const canvasBg = isDark ? '#0e0e10' : '#e9ebee'
+    const textMuted = isDark ? '#8b8f96' : '#64748b'
 
     if (!image) {
       ctx.fillStyle = canvasBg
@@ -113,10 +119,12 @@ export default function CanvasEditor({
 
     const showGuides = !isRendering && (!isPreviewing || showGuidesInPreview)
 
+    const scheduleOverlayRedraw = () => requestAnimationFrame(() => drawBaseRef.current?.())
+
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
       const camera = getCameraForPoint(image, points[activeIndex])
       const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle)
+      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, currentTimeRef.current, !overlaysLocked)
       if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
       return
     }
@@ -127,7 +135,14 @@ export default function CanvasEditor({
     ctx.drawImage(image, r.x, r.y, r.w, r.h)
 
     if (showGuides) drawEditorGuides(canvas, ctx)
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle])
+    // 疊加圖以輸出畫面座標繪製；編輯模式下顯示框線與縮放 handle（鎖定時只顯示不可拖）
+    if (imageOverlays.length) {
+      drawOverlays(canvas, ctx, imageOverlays, currentTimeRef.current, {
+        guides: showGuides && !overlaysLocked,
+        onImageLoad: scheduleOverlayRedraw,
+      })
+    }
+  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, overlaysLocked, currentTimeRef])
 
   const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
     const canvas = canvasRef.current
@@ -332,6 +347,7 @@ export default function CanvasEditor({
     ctx.fillText(String(i + 1), c.x, c.y)
   }
 
+  useEffect(() => { drawBaseRef.current = drawBase }, [drawBase])
   useEffect(() => { drawBase() }, [drawBase, forceRedraw])
 
   const getCanvasPointer = (event: React.PointerEvent) => {
@@ -423,6 +439,22 @@ export default function CanvasEditor({
     target.setPointerCapture(event.pointerId)
     const pos = getCanvasPointer(event)
 
+    // 疊加圖優先命中（未鎖定時）；鎖定後 canvas 完全不理會疊加圖
+    if (!overlaysLocked && imageOverlays.length && onOverlayChange && canvasRef.current) {
+      const hit = findOverlayHit(canvasRef.current, imageOverlays, currentTimeRef.current, pos.x, pos.y)
+      if (hit) {
+        const rect = getOverlayCanvasRect(canvasRef.current, hit.overlay)
+        dragStateRef.current = {
+          type: hit.type,
+          index: -1,
+          overlayId: hit.overlay.id,
+          offsetX: pos.x - (rect.x + rect.w / 2),
+          offsetY: pos.y - (rect.y + rect.h / 2),
+        }
+        return
+      }
+    }
+
     if (activeTab === 'caption') {
       // Camera captions use precise box hit-testing and take priority over narration subtitles.
       const hit = getCaptionHit(pos.x, pos.y)
@@ -512,6 +544,23 @@ export default function CanvasEditor({
     if (!canvas || !image || !dragStateRef.current || isRendering) return
     const pos = getCanvasPointer(event)
     const drag = dragStateRef.current
+
+    if (drag.type === 'overlayMove' || drag.type === 'overlayResize') {
+      if (!onOverlayChange || !drag.overlayId) return
+      const overlay = imageOverlays.find(o => o.id === drag.overlayId)
+      if (!overlay) return
+      if (drag.type === 'overlayMove') {
+        onOverlayChange(overlay.id, {
+          x: clamp((pos.x - (drag.offsetX ?? 0)) / canvas.width, 0, 1),
+          y: clamp((pos.y - (drag.offsetY ?? 0)) / canvas.height, 0, 1),
+        })
+      } else {
+        // 以中心到指標的水平距離推導寬度
+        const halfW = Math.abs(pos.x - overlay.x * canvas.width)
+        onOverlayChange(overlay.id, { scale: clamp(halfW * 2 / canvas.width, 0.05, 1.5) })
+      }
+      return
+    }
 
     if (drag.type === 'subtitleMove') {
       if (onSubtitlePositionChange) {

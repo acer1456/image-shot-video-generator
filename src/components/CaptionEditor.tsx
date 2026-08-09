@@ -9,44 +9,6 @@ import { Separator } from '@/components/ui/separator'
 import { clamp } from '@/lib/utils'
 import { AlignCenter } from 'lucide-react'
 
-/** Circular dial that shows the shadow direction and lets the user click to set it. */
-function DirectionPicker({
-  angle, onAngle, disabled
-}: { angle: number; onAngle: (v: number) => void; disabled: boolean }) {
-  const S = 40, cx = 20, cy = 20, r = 14
-  const rad = (angle * Math.PI) / 180
-  const x2 = cx + r * Math.cos(rad)
-  const y2 = cy + r * Math.sin(rad)
-  return (
-    <svg
-      width={S} height={S}
-      style={{ cursor: disabled ? 'not-allowed' : 'crosshair', opacity: disabled ? 0.5 : 1, flexShrink: 0 }}
-      className="rounded-full hover:bg-muted"
-      onClick={e => {
-        if (disabled) return
-        const rect = e.currentTarget.getBoundingClientRect()
-        const mx = e.clientX - rect.left - cx
-        const my = e.clientY - rect.top - cy
-        const a = Math.atan2(my, mx) * 180 / Math.PI
-        onAngle(Math.round(((a % 360) + 360) % 360))
-      }}
-    >
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3" />
-      {[0, 90, 180, 270].map(a => {
-        const ar = (a * Math.PI) / 180
-        return (
-          <line key={a}
-            x1={cx + (r - 5) * Math.cos(ar)} y1={cy + (r - 5) * Math.sin(ar)}
-            x2={cx + r * Math.cos(ar)}         y2={cy + r * Math.sin(ar)}
-            stroke="currentColor" strokeWidth="1.5" opacity="0.4" />
-        )
-      })}
-      <line x1={cx} y1={cy} x2={x2} y2={y2} stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-      <circle cx={x2} cy={y2} r="3" fill="currentColor" />
-    </svg>
-  )
-}
-
 const FONT_OPTIONS = [
   { group: 'Noto / 實用字體', options: [
     { value: 'Noto Sans TC, Microsoft JhengHei, sans-serif', label: 'Noto Sans TC 繁體中文' },
@@ -270,45 +232,26 @@ export default function CaptionEditor({ point, disabled, activeCaptionIndex, onS
 
           <Separator />
 
-          {/* ── 主字幕文字陰影 ──────────────────────────────────── */}
-          <p className="text-xs font-semibold">主字幕文字陰影</p>
+          {/* ── 文字顏色 ────────────────────────────────────────── */}
+          <p className="text-xs font-semibold">文字顏色</p>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="mb-1 block">陰影色</Label>
+              <Label className="mb-1 block">主字幕顏色</Label>
               <input
                 type="color"
-                value={cap?.textShadowColor || '#000000'}
-                onChange={e => onUpdateCaption('textShadowColor', e.target.value)}
+                value={cap?.textColor || '#ffffff'}
+                onChange={e => onUpdateCaption('textColor', e.target.value)}
                 className="w-full h-9 rounded-lg border border-input cursor-pointer"
                 disabled={disabled}
               />
             </div>
-            <RangeNumber label="透明度" value={cap?.textShadowAlpha ?? 0.7} min={0} max={1} step={0.05} field="textShadowAlpha" />
-          </div>
-          <RangeNumber label="距離 (px)" value={cap?.textShadowDistance ?? 0} min={0} max={60} step={1} field="textShadowDistance" />
-          <div>
-            <Label className="mb-1 block">
-              方向&nbsp;{Math.round(cap?.textShadowAngle ?? 120)}°&nbsp;
-              <span className="font-normal text-muted-foreground">(0° 右・90° 下・180° 左・270° 上)</span>
-            </Label>
-            <div className="flex gap-2 items-center">
-              <DirectionPicker
-                angle={cap?.textShadowAngle ?? 120}
-                onAngle={v => onUpdateCaption('textShadowAngle', v)}
-                disabled={disabled}
-              />
-              <Slider
-                value={cap?.textShadowAngle ?? 120}
-                min={0} max={359} step={1}
-                onChange={v => onUpdateCaption('textShadowAngle', v)}
-                disabled={disabled}
-                className="flex-1"
-              />
-              <Input
-                type="number" min={0} max={359} step={1}
-                value={Math.round(cap?.textShadowAngle ?? 120)}
-                onChange={e => onUpdateCaption('textShadowAngle', ((Number(e.target.value) % 360) + 360) % 360)}
-                className="w-20 h-8 text-xs"
+            <div>
+              <Label className="mb-1 block">副字幕顏色</Label>
+              <input
+                type="color"
+                value={cap?.subTextColor || '#ffffff'}
+                onChange={e => onUpdateCaption('subTextColor', e.target.value)}
+                className="w-full h-9 rounded-lg border border-input cursor-pointer"
                 disabled={disabled}
               />
             </div>
@@ -316,49 +259,80 @@ export default function CaptionEditor({ point, disabled, activeCaptionIndex, onS
 
           <Separator />
 
-          {/* ── 副字幕文字陰影 ──────────────────────────────────── */}
-          <p className="text-xs font-semibold">副字幕文字陰影</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="mb-1 block">陰影色</Label>
-              <input
-                type="color"
-                value={cap?.subTextShadowColor || '#000000'}
-                onChange={e => onUpdateCaption('subTextShadowColor', e.target.value)}
-                className="w-full h-9 rounded-lg border border-input cursor-pointer"
-                disabled={disabled}
-              />
+          {/* ── 文字描邊 ────────────────────────────────────────── */}
+          <p className="text-xs font-semibold">文字描邊</p>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={cap?.strokeEnabled === true}
+              onChange={e => onUpdateCaption('strokeEnabled', e.target.checked)}
+              disabled={disabled}
+              className="rounded"
+            />
+            <span className="text-xs">啟用描邊</span>
+          </label>
+          {cap?.strokeEnabled && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-1 block">描邊顏色</Label>
+                <input
+                  type="color"
+                  value={cap?.strokeColor || '#000000'}
+                  onChange={e => onUpdateCaption('strokeColor', e.target.value)}
+                  className="w-full h-9 rounded-lg border border-input cursor-pointer"
+                  disabled={disabled}
+                />
+              </div>
+              <RangeNumber label="描邊粗細 (px)" value={cap?.strokeWidth ?? 4} min={1} max={16} step={1} field="strokeWidth" />
             </div>
-            <RangeNumber label="透明度" value={cap?.subTextShadowAlpha ?? 0.7} min={0} max={1} step={0.05} field="subTextShadowAlpha" />
+          )}
+
+          <Separator />
+
+          {/* ── 文字陰影（與旁白字幕卡片相同的調整方式）────────── */}
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold">文字陰影</p>
+            <button
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                (cap?.textShadowEnabled ?? true)
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-muted text-muted-foreground border-border'
+              }`}
+              onClick={() => onUpdateCaption('textShadowEnabled', !(cap?.textShadowEnabled ?? true))}
+              disabled={disabled}
+            >
+              {(cap?.textShadowEnabled ?? true) ? '開' : '關'}
+            </button>
           </div>
-          <RangeNumber label="距離 (px)" value={cap?.subTextShadowDistance ?? 0} min={0} max={60} step={1} field="subTextShadowDistance" />
-          <div>
-            <Label className="mb-1 block">
-              方向&nbsp;{Math.round(cap?.subTextShadowAngle ?? 120)}°&nbsp;
-              <span className="font-normal text-muted-foreground">(0° 右・90° 下・180° 左・270° 上)</span>
-            </Label>
-            <div className="flex gap-2 items-center">
-              <DirectionPicker
-                angle={cap?.subTextShadowAngle ?? 120}
-                onAngle={v => onUpdateCaption('subTextShadowAngle', v)}
-                disabled={disabled}
-              />
-              <Slider
-                value={cap?.subTextShadowAngle ?? 120}
-                min={0} max={359} step={1}
-                onChange={v => onUpdateCaption('subTextShadowAngle', v)}
-                disabled={disabled}
-                className="flex-1"
-              />
-              <Input
-                type="number" min={0} max={359} step={1}
-                value={Math.round(cap?.subTextShadowAngle ?? 120)}
-                onChange={e => onUpdateCaption('subTextShadowAngle', ((Number(e.target.value) % 360) + 360) % 360)}
-                className="w-20 h-8 text-xs"
-                disabled={disabled}
-              />
-            </div>
-          </div>
+
+          {(cap?.textShadowEnabled ?? true) && (
+            <>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">模糊強度</Label>
+                  <span className="text-[10px] text-muted-foreground">{cap?.textShadowBlur ?? 10}</span>
+                </div>
+                <Slider
+                  min={0} max={24} step={1}
+                  value={cap?.textShadowBlur ?? 10}
+                  onChange={v => onUpdateCaption('textShadowBlur', v)}
+                  disabled={disabled}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">陰影透明度</Label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round((cap?.textShadowOpacity ?? 0.7) * 100)}%</span>
+                </div>
+                <Slider
+                  min={10} max={100} step={5}
+                  value={Math.round((cap?.textShadowOpacity ?? 0.7) * 100)}
+                  onChange={v => onUpdateCaption('textShadowOpacity', v / 100)}
+                  disabled={disabled}
+                />
+              </div>
+            </>
+          )}
 
           <Separator />
 

@@ -9,20 +9,20 @@ export interface CaptionData {
   subtitleFontFamily: string
   boxScaleX: number
   boxScaleY: number
+  // ── Text colour / stroke（與旁白字幕卡片同等的樣式參數）──
+  textColor: string
+  subTextColor: string
+  strokeEnabled: boolean
+  strokeColor: string
+  strokeWidth: number   // px，以 1080 輸出寬為基準
   // ── Shadow box ─────────────────────
   shadowColor: string
   shadowAlpha: number
   shadowBoxVisible: boolean
-  // ── Main text shadow ───────────────
-  textShadowColor: string
-  textShadowAlpha: number
-  textShadowAngle: number
-  textShadowDistance: number
-  // ── Subtitle text shadow ───────────
-  subTextShadowColor: string
-  subTextShadowAlpha: number
-  subTextShadowAngle: number
-  subTextShadowDistance: number
+  // ── Text shadow（與旁白字幕卡片相同的參數模型：開關＋模糊＋透明度，主副共用）──
+  textShadowEnabled: boolean
+  textShadowBlur: number     // 0–24 px
+  textShadowOpacity: number  // 0–1
 }
 
 export interface CameraPoint {
@@ -34,6 +34,19 @@ export interface CameraPoint {
   holdDuration: number
   caption: CaptionData
   extraCaptions?: CaptionData[]
+}
+
+// 疊加圖片：以輸出畫面（canvas）座標定位的貼圖，如 NLE 的 PiP 層
+export interface ImageOverlay {
+  id: string
+  name: string
+  dataUrl: string
+  x: number          // 中心點，0–1（輸出畫面座標）
+  y: number
+  scale: number      // 寬度 = scale × 輸出寬
+  opacity: number    // 0–1
+  startTime: number  // 秒
+  duration: number   // 秒
 }
 
 export interface BackgroundSettings {
@@ -81,11 +94,12 @@ export interface ProjectData {
 }
 
 export interface DragState {
-  type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove'
+  type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove' | 'overlayMove' | 'overlayResize'
   index: number
   captionIndex?: number  // 0 = primary caption, 1+ = extraCaptions[captionIndex-1]
   offsetX?: number       // image-space offset for move-handle drag
   offsetY?: number
+  overlayId?: string     // for overlayMove / overlayResize
 }
 
 export interface SnapGuide {
@@ -150,6 +164,13 @@ export interface SubtitleStyle {
   shadowBlur: number      // 0–24 px
   shadowOpacity: number   // 0–1
   subtitlePosition: { x: number; y: number }  // normalized 0–1
+  color: string           // 主字幕文字顏色
+  translationScale: number // 副（翻譯）字幕相對主字幕的大小，0.5–1
+  strokeEnabled: boolean  // 文字描邊
+  strokeColor: string
+  strokeWidth: number     // px（以 1080 寬為基準）
+  backgroundEnabled: boolean  // 半透明背景條
+  backgroundOpacity: number   // 0–1
 }
 
 export interface SubtitleCue {
@@ -172,4 +193,11 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   shadowBlur: 10,
   shadowOpacity: 0.9,
   subtitlePosition: { x: 0.5, y: 0.87 },
+  color: '#ffffff',
+  translationScale: 0.72,
+  strokeEnabled: false,
+  strokeColor: '#000000',
+  strokeWidth: 4,
+  backgroundEnabled: false,
+  backgroundOpacity: 0.45,
 }

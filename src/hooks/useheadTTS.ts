@@ -249,6 +249,7 @@ function buildSubtitleCues(narrationId: string, words: NarrationWordTimestamp[])
 
 export function useheadTTS() {
   const headttsRef = useRef<HeadTTSInstance | null>(null)
+  const loadedVoiceRef = useRef<string | null>(null)
   const connectedRef = useRef(false)
   const generatingRef = useRef(false)
   const [status, setStatus] = useState<Status>({ phase: 'idle', message: '', progress: 0 })
@@ -256,6 +257,7 @@ export function useheadTTS() {
   const releaseHeadTTS = useCallback(() => {
     const headtts = headttsRef.current
     headttsRef.current = null
+    loadedVoiceRef.current = null
     connectedRef.current = false
     if (!headtts) return
     try {
@@ -286,6 +288,10 @@ export function useheadTTS() {
   }, [])
 
   const getHeadTTS = useCallback(async (voice: string, speed: number) => {
+    // 實例是以特定 voice 預載建立的；換聲音時重建，同聲音則重用（免重新下載模型）
+    if (headttsRef.current && loadedVoiceRef.current !== voice) {
+      releaseHeadTTS()
+    }
     if (!headttsRef.current) {
       setStatus({ phase: 'loading', message: '載入 HeadTTS…', progress: 0 })
       const moduleUrl = HEADTTS_MODULE_URL
@@ -305,6 +311,7 @@ export function useheadTTS() {
         workerModule: HEADTTS_WORKER_URL,
         dictionaryURL: HEADTTS_DICTIONARY_URL,
       })
+      loadedVoiceRef.current = voice
     }
 
     if (!connectedRef.current) {
@@ -323,7 +330,7 @@ export function useheadTTS() {
     })
 
     return headttsRef.current
-  }, [])
+  }, [releaseHeadTTS])
 
   useEffect(() => () => {
     releaseHeadTTS()
@@ -450,10 +457,11 @@ export function useheadTTS() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'HeadTTS 生成失敗'
       setStatus({ phase: 'error', message, progress: 0 })
+      // 出錯時 worker 狀態不可信，整組釋放；成功時保留實例供下次重用
+      releaseHeadTTS()
       throw error
     } finally {
       generatingRef.current = false
-      releaseHeadTTS()
     }
   }, [getHeadTTS, releaseHeadTTS])
 

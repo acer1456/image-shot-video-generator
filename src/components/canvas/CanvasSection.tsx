@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import CanvasEditor from '@/components/canvas/CanvasEditor'
 import { Switch } from '@/components/ui/switch'
-import { Hand, Maximize2 } from 'lucide-react'
+import { Hand, Maximize2, SlidersHorizontal } from 'lucide-react'
 import type { ActiveTab, SafeAreaVisibility } from '@/types'
 
 type CanvasEditorProps = React.ComponentPropsWithoutRef<typeof CanvasEditor>
@@ -10,7 +10,6 @@ interface CanvasSectionProps {
   isDisabled: boolean
   hasImage: boolean
   activeTab: ActiveTab
-  onTabChange: (tab: 'camera' | 'caption') => void
   onOpenImmersiveMode: () => void
   showAllPoints: boolean
   onlyActiveBox: boolean
@@ -34,7 +33,7 @@ interface CanvasSectionProps {
 }
 
 export function CanvasSection({
-  isDisabled, hasImage, activeTab, onTabChange,
+  isDisabled, hasImage, activeTab,
   onOpenImmersiveMode,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
   showNarrationInOutput, showCameraCaptionsInOutput, onToggle,
@@ -46,6 +45,20 @@ export function CanvasSection({
   const [panY, setPanY] = useState(0)
   const [isPanMode, setIsPanMode] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
+  const [showDisplayOptions, setShowDisplayOptions] = useState(false)
+  const displayOptionsRef = useRef<HTMLDivElement>(null)
+
+  // 點擊面板外自動關閉顯示選項
+  useEffect(() => {
+    if (!showDisplayOptions) return
+    const handler = (event: MouseEvent) => {
+      if (displayOptionsRef.current && !displayOptionsRef.current.contains(event.target as Node)) {
+        setShowDisplayOptions(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showDisplayOptions])
   const panDragRef = useRef<{ startX: number; startY: number; basePanX: number; basePanY: number } | null>(null)
   const SCALE_STEP = 0.25
   const SCALE_MIN  = 0.25
@@ -62,7 +75,7 @@ export function CanvasSection({
   }
   return (
     <div className="flex-1 min-w-0 min-h-0">
-      <div className="relative h-full min-h-0 rounded-xl border border-border bg-card overflow-hidden flex items-center justify-center">
+      <div className="relative h-full min-h-0 rounded-2xl border border-border bg-card overflow-hidden flex items-center justify-center">
         <div style={{ transform: `translate(${panX}px, ${panY}px) scale(${canvasScale})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
           <CanvasEditor {...canvasEditorProps} />
         </div>
@@ -87,76 +100,77 @@ export function CanvasSection({
           />
         )}
 
-        {/* 鎖頭/字幕 tab switch */}
-        <div className="absolute top-2 right-2 z-10">
-          <label className="flex items-center gap-1.5 cursor-pointer select-none rounded-lg bg-secondary/80 backdrop-blur-sm border border-border/50 px-2.5 py-1 h-8">
-            <span className={`text-xs transition-colors ${activeTab !== 'caption' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>鏡頭</span>
-            <Switch
-              checked={activeTab === 'caption'}
-              onCheckedChange={v => onTabChange(v ? 'caption' : 'camera')}
-              disabled={isDisabled || !hasImage}
-            />
-            <span className={`text-xs transition-colors ${activeTab === 'caption' ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>字幕</span>
-          </label>
-        </div>
-
-        <div className="absolute top-14 left-2 z-10 flex flex-col gap-2 p-2.5 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 min-w-[132px]">
-          <p className="text-[9px] font-semibold text-secondary-foreground text-center">輸出內容</p>
-          <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-            <span className="text-xs">旁白字幕</span>
-            <Switch checked={showNarrationInOutput} onCheckedChange={v => onToggle('showNarrationInOutput', v)} />
-          </label>
-          <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-            <span className="text-xs">鏡頭字幕</span>
-            <Switch checked={showCameraCaptionsInOutput} onCheckedChange={v => onToggle('showCameraCaptionsInOutput', v)} />
-          </label>
-        </div>
-
-        {/* Combined panel: contextual toggles + platform preview */}
-        <div className="absolute top-14 right-2 z-10 flex flex-col gap-2 p-2.5 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 min-w-[108px]">
-          <p className="text-[9px] font-semibold text-secondary-foreground text-center">輔助顯示</p>
-          {activeTab === 'camera' && (
-            <>
+        {/* 顯示選項：僅單一小圖示置於右上角，不佔用畫布空間 */}
+        <div ref={displayOptionsRef} className="absolute top-2 right-2 z-10">
+          <button
+            onClick={() => setShowDisplayOptions(v => !v)}
+            className={`h-8 w-8 rounded-full flex items-center justify-center backdrop-blur-md border shadow-lg transition-colors ${
+              showDisplayOptions
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-card/80 border-border/60 text-muted-foreground hover:text-foreground'
+            }`}
+            title="顯示選項"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+          </button>
+          {showDisplayOptions && (
+            <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-card/95 backdrop-blur-md border border-border/60 shadow-2xl p-3 flex flex-col gap-2.5 z-20">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">輸出內容</p>
               <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-                <span className="text-xs">全部點位</span>
-                <Switch checked={showAllPoints} onCheckedChange={v => onToggle('showAllPoints', v)} />
+                <span className="text-xs">旁白字幕</span>
+                <Switch checked={showNarrationInOutput} onCheckedChange={v => onToggle('showNarrationInOutput', v)} />
               </label>
               <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-                <span className="text-xs">視野框</span>
-                <Switch checked={onlyActiveBox} onCheckedChange={v => onToggle('onlyActiveBox', v)} />
+                <span className="text-xs">鏡頭字幕</span>
+                <Switch checked={showCameraCaptionsInOutput} onCheckedChange={v => onToggle('showCameraCaptionsInOutput', v)} />
               </label>
-            </>
-          )}
-          {activeTab === 'caption' && (
-            <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-              <span className="text-xs">字幕框</span>
-              <Switch checked={showCaptionBox} onCheckedChange={v => onToggle('showCaptionBox', v)} />
-            </label>
-          )}
-          <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-            <span className="text-xs">預覽輔助</span>
-            <Switch checked={showGuidesInPreview} onCheckedChange={v => onToggle('showGuidesInPreview', v)} />
-          </label>
 
-          {activeTab === 'caption' && (
-            <>
-              <div className="w-full h-px bg-border/60" />
-              <p className="text-[9px] font-semibold text-secondary-foreground text-center">平台預覽</p>
-              {(['ig', 'shorts', 'tiktok'] as const).map(key => (
-                <label key={key} className="flex items-center justify-between gap-3 cursor-pointer select-none">
-                <span className="text-[10px] text-muted-foreground">
-                    {{ ig: 'IG Reels', shorts: 'YT Shorts', tiktok: 'TikTok' }[key]}
-                </span>
-                <Switch
-                    checked={safeAreaVisibility[key]}
-                    onCheckedChange={val => onSafeAreaChange(key, val)}
-                />
+              <div className="h-px bg-border/60" />
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">輔助顯示</p>
+              {activeTab === 'camera' && (
+                <>
+                  <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                    <span className="text-xs">全部點位</span>
+                    <Switch checked={showAllPoints} onCheckedChange={v => onToggle('showAllPoints', v)} />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                    <span className="text-xs">視野框</span>
+                    <Switch checked={onlyActiveBox} onCheckedChange={v => onToggle('onlyActiveBox', v)} />
+                  </label>
+                </>
+              )}
+              {activeTab === 'caption' && (
+                <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                  <span className="text-xs">字幕框</span>
+                  <Switch checked={showCaptionBox} onCheckedChange={v => onToggle('showCaptionBox', v)} />
                 </label>
-            ))}
-            </>
+              )}
+              <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                <span className="text-xs">預覽輔助</span>
+                <Switch checked={showGuidesInPreview} onCheckedChange={v => onToggle('showGuidesInPreview', v)} />
+              </label>
+
+              {activeTab === 'caption' && (
+                <>
+                  <div className="h-px bg-border/60" />
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">平台預覽</p>
+                  {(['ig', 'shorts', 'tiktok'] as const).map(key => (
+                    <label key={key} className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                      <span className="text-xs text-muted-foreground">
+                        {{ ig: 'IG Reels', shorts: 'YT Shorts', tiktok: 'TikTok' }[key]}
+                      </span>
+                      <Switch
+                        checked={safeAreaVisibility[key]}
+                        onCheckedChange={val => onSafeAreaChange(key, val)}
+                      />
+                    </label>
+                  ))}
+                </>
+              )}
+            </div>
           )}
         </div>
-       
+
         {/* Viewport zoom controls */}
         <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg bg-secondary/80 backdrop-blur-sm border border-border/50 p-0.5">
           <button

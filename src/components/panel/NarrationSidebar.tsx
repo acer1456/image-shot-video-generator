@@ -44,6 +44,7 @@ export interface NarrationSidebarProps {
   image: HTMLImageElement | null
   onApplyAiStory: (result: NarrationAIStoryResult) => void
   onApplyAiCamera: (result: NarrationAICameraResult) => void
+  onApplyStyleToCameraCaption?: (style: SubtitleStyle) => void
   collapsed: boolean
   onToggleCollapse: () => void
 }
@@ -114,7 +115,7 @@ export function NarrationSidebar({
   subtitleCues, onSubtitleCuesChange,
   activeSubtitleId, onActiveSubtitleIdChange,
   inputText, onInputTextChange,
-  image, onApplyAiStory, onApplyAiCamera,
+  image, onApplyAiStory, onApplyAiCamera, onApplyStyleToCameraCaption,
   collapsed, onToggleCollapse,
 }: NarrationSidebarProps) {
   const { generate, cancel, status, voices } = useheadTTS()
@@ -350,16 +351,12 @@ export function NarrationSidebar({
   if (collapsed) {
     return (
       <div
-        className="flex-shrink-0 rounded-xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
-        style={{ width: 36 }}
+        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-row lg:flex-col items-center justify-between lg:justify-between px-4 py-2 lg:py-4 cursor-pointer select-none w-full lg:w-9"
         onClick={onToggleCollapse}
         title="展開旁白面板"
       >
-        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-        <span
-          className="text-[11px] font-semibold text-muted-foreground"
-          style={{ writingMode: 'vertical-rl', textOrientation: 'upright', letterSpacing: 2 }}
-        >
+        <ChevronRight className="h-4 w-4 text-muted-foreground rotate-90 lg:rotate-0" />
+        <span className="text-[12px] font-semibold text-muted-foreground lg:[writing-mode:vertical-rl] lg:[text-orientation:upright] lg:tracking-[2px]">
           旁白
         </span>
         <Mic className="h-4 w-4 text-muted-foreground" />
@@ -370,11 +367,11 @@ export function NarrationSidebar({
   const cueStyle = activeCue?.style ?? DEFAULT_SUBTITLE_STYLE
 
   return (
-    <aside className="w-72 flex-shrink-0 rounded-xl border border-border bg-card flex flex-col overflow-hidden">
+    <aside className="w-full lg:w-72 flex-shrink-0 rounded-2xl border border-border bg-card flex flex-col overflow-hidden max-h-[70vh] lg:max-h-none">
       <div className="p-3 border-b border-border flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-1.5">
-          <Mic className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-bold">旁白</h2>
+          <Mic className="h-3.5 w-3.5 text-primary" />
+          <h2 className="text-[13px] font-semibold">旁白</h2>
           {track && (
             <span className="text-xs text-muted-foreground bg-muted rounded px-1">
               {formatSecs(getNarrationDuration(track))}
@@ -647,14 +644,27 @@ export function NarrationSidebar({
             <div className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold text-muted-foreground">字幕樣式</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 px-2 text-[10px]"
-                  onClick={applyActiveStyleToAll}
-                >
-                  套用全部
-                </Button>
+                <div className="flex items-center gap-1">
+                  {onApplyStyleToCameraCaption && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[10px]"
+                      title="把這組字幕樣式對應套用到目前選取鏡頭的鏡頭字幕"
+                      onClick={() => onApplyStyleToCameraCaption(cueStyle)}
+                    >
+                      套用到鏡頭字幕
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={applyActiveStyleToAll}
+                  >
+                    套用全部
+                  </Button>
+                </div>
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-muted-foreground">字體</label>
@@ -680,6 +690,92 @@ export function NarrationSidebar({
                   onChange={v => updateActiveCueStyle({ fontSizeRatio: v / 1000 })}
                 />
               </div>
+
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground">中文字幕大小</label>
+                  <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.translationScale * 100)}%</span>
+                </div>
+                <Slider
+                  min={50} max={100} step={2}
+                  value={Math.round(cueStyle.translationScale * 100)}
+                  onChange={v => updateActiveCueStyle({ translationScale: v / 100 })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">文字顏色</label>
+                <input
+                  type="color"
+                  value={cueStyle.color}
+                  onChange={e => updateActiveCueStyle({ color: e.target.value })}
+                  className="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">描邊</label>
+                <div className="flex items-center gap-2">
+                  {cueStyle.strokeEnabled && (
+                    <input
+                      type="color"
+                      value={cueStyle.strokeColor}
+                      onChange={e => updateActiveCueStyle({ strokeColor: e.target.value })}
+                      className="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
+                    />
+                  )}
+                  <button
+                    className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                      cueStyle.strokeEnabled
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-border'
+                    }`}
+                    onClick={() => updateActiveCueStyle({ strokeEnabled: !cueStyle.strokeEnabled })}
+                  >
+                    {cueStyle.strokeEnabled ? '開' : '關'}
+                  </button>
+                </div>
+              </div>
+              {cueStyle.strokeEnabled && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-muted-foreground">描邊粗細</label>
+                    <span className="text-[10px] text-muted-foreground">{cueStyle.strokeWidth}px</span>
+                  </div>
+                  <Slider
+                    min={1} max={12} step={1}
+                    value={cueStyle.strokeWidth}
+                    onChange={v => updateActiveCueStyle({ strokeWidth: v })}
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-muted-foreground">背景條</label>
+                <button
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                    cueStyle.backgroundEnabled
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted text-muted-foreground border-border'
+                  }`}
+                  onClick={() => updateActiveCueStyle({ backgroundEnabled: !cueStyle.backgroundEnabled })}
+                >
+                  {cueStyle.backgroundEnabled ? '開' : '關'}
+                </button>
+              </div>
+              {cueStyle.backgroundEnabled && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-muted-foreground">背景不透明度</label>
+                    <span className="text-[10px] text-muted-foreground">{Math.round(cueStyle.backgroundOpacity * 100)}%</span>
+                  </div>
+                  <Slider
+                    min={10} max={90} step={5}
+                    value={Math.round(cueStyle.backgroundOpacity * 100)}
+                    onChange={v => updateActiveCueStyle({ backgroundOpacity: v / 100 })}
+                  />
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <label className="text-xs text-muted-foreground">陰影</label>

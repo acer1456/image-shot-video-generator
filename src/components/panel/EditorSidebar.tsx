@@ -55,16 +55,12 @@ export function EditorSidebar({
   if (collapsed) {
     return (
       <div
-        className="flex-shrink-0 rounded-xl border border-border bg-card flex flex-col items-center justify-between py-4 cursor-pointer select-none"
-        style={{ width: 36 }}
+        className="flex-shrink-0 rounded-2xl border border-border bg-card flex flex-row lg:flex-col items-center justify-between px-4 py-2 lg:py-4 cursor-pointer select-none w-full lg:w-9"
         onClick={onToggleCollapse}
         title="展開鏡頭面板"
       >
-        <ChevronLeft className="h-4 w-4 text-muted-foreground" />
-        <span
-          className="text-[11px] font-semibold text-muted-foreground"
-          style={{ writingMode: 'vertical-rl', textOrientation: 'upright', letterSpacing: 2 }}
-        >
+        <ChevronLeft className="h-4 w-4 text-muted-foreground -rotate-90 lg:rotate-0" />
+        <span className="text-[12px] font-semibold text-muted-foreground lg:[writing-mode:vertical-rl] lg:[text-orientation:upright] lg:tracking-[2px]">
           鏡頭
         </span>
         <Settings className="h-4 w-4 text-muted-foreground" />
@@ -74,12 +70,14 @@ export function EditorSidebar({
 
   return (
     <>
-      <aside className="w-96 flex-shrink-0 rounded-xl border border-border bg-card overflow-y-auto">
+      <aside className="w-full lg:w-96 flex-shrink-0 rounded-2xl border border-border bg-card overflow-y-auto max-h-[70vh] lg:max-h-none">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <Button variant="ghost" size="icon" className="h-7 w-7" title="收合鏡頭面板" onClick={onToggleCollapse}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-          <h2 className="text-base font-bold">{activeIndex >= 0 ? `目前鏡頭： ${activeIndex + 1}` : '目前未選擇鏡頭'}</h2>
+          <h2 className="text-[13px] font-semibold">
+            {activeIndex >= 0 ? `鏡頭 ${activeIndex + 1}` : '鏡頭'}
+          </h2>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" title="輸出設定" onClick={() => setIsSettingsOpen(true)}>
               <Settings className="h-4 w-4" />

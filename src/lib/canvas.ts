@@ -1,8 +1,9 @@
-import type { CameraPoint, CaptionData, BackgroundSettings, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, SubtitleStyle } from '@/types'
+import { drawOverlays } from './overlays'
 import {
   OUTPUT_W, OUTPUT_H, OUTPUT_RATIO, DEFAULT_FONT,
   clamp, mix, easeInOut, hexToRgba, roundRect,
-  wrapText, measureText
+  wrapText
 } from './utils'
 
 export interface FitRect {
@@ -102,7 +103,28 @@ export function getAllCaptions(point: CameraPoint): CaptionData[] {
   return [point.caption, ...(point.extraCaptions || [])]
 }
 
+// 字幕排版快取：CaptionData 在 store 內是 immutable 更新（每次編輯都是新物件），
+// 所以能以物件參照為 key。字型載入完成會使 measureText 結果改變，用 generation 使快取失效。
+const captionLayoutCache = new WeakMap<CaptionData, { key: string; layout: CaptionLayout }>()
+let fontGeneration = 0
+if (typeof document !== 'undefined' && document.fonts?.addEventListener) {
+  document.fonts.addEventListener('loadingdone', () => { fontGeneration++ })
+}
+
 export function getCaptionLayout(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  cap: CaptionData
+): CaptionLayout {
+  const cacheKey = `${canvas.width}x${canvas.height}|${fontGeneration}`
+  const cached = captionLayoutCache.get(cap)
+  if (cached && cached.key === cacheKey) return cached.layout
+  const layout = computeCaptionLayout(canvas, ctx, cap)
+  captionLayoutCache.set(cap, { key: cacheKey, layout })
+  return layout
+}
+
+function computeCaptionLayout(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cap: CaptionData
@@ -139,6 +161,37 @@ export function getCaptionLayout(
   }
 }
 
+// 模糊背景在預覽 / 匯出時每一幀都相同，但 ctx.filter blur 在 1080×1920 非常昂貴。
+// 以 image 為 key 快取模糊結果，同一張圖 + 相同設定只算一次。
+const blurBackgroundCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>()
+
+function getBlurredBackground(canvas: HTMLCanvasElement, image: HTMLImageElement, bg: BackgroundSettings) {
+  const key = `${bg.blur || 0}|${canvas.width}x${canvas.height}`
+  let perImage = blurBackgroundCache.get(image)
+  if (!perImage) {
+    perImage = new Map()
+    blurBackgroundCache.set(image, perImage)
+  }
+  const cached = perImage.get(key)
+  if (cached) return cached
+  const off = document.createElement('canvas')
+  off.width = canvas.width
+  off.height = canvas.height
+  const offCtx = off.getContext('2d')!
+  offCtx.filter = `blur(${bg.blur || 0}px)`
+  const scale = Math.max(off.width / image.width, off.height / image.height)
+  const dw = image.width * scale
+  const dh = image.height * scale
+  const dx = (off.width - dw) / 2
+  const dy = (off.height - dh) / 2
+  const bleed = Math.max(0, (bg.blur || 0) * 2)
+  offCtx.drawImage(image, dx - bleed, dy - bleed, dw + bleed * 2, dh + bleed * 2)
+  // 編輯畫布與匯出畫布尺寸不同會各留一份；超過 4 份時清掉最舊的
+  if (perImage.size >= 4) perImage.delete(perImage.keys().next().value!)
+  perImage.set(key, off)
+  return off
+}
+
 export function drawOutputBackground(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -148,16 +201,7 @@ export function drawOutputBackground(
   ctx.fillStyle = bg.color || '#000000'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   if (!image || bg.mode !== 'blur') return
-  ctx.save()
-  ctx.filter = `blur(${bg.blur || 0}px)`
-  const scale = Math.max(canvas.width / image.width, canvas.height / image.height)
-  const dw = image.width * scale
-  const dh = image.height * scale
-  const dx = (canvas.width - dw) / 2
-  const dy = (canvas.height - dh) / 2
-  const bleed = Math.max(0, (bg.blur || 0) * 2)
-  ctx.drawImage(image, dx - bleed, dy - bleed, dw + bleed * 2, dh + bleed * 2)
-  ctx.restore()
+  ctx.drawImage(getBlurredBackground(canvas, image, bg), 0, 0)
 }
 
 export function drawCamera(
@@ -172,7 +216,10 @@ export function drawCamera(
   snapGuide: { x: boolean; y: boolean },
   activeCaptionIndex = 0,
   narrationText?: string,
-  subtitleStyle?: SubtitleStyle
+  subtitleStyle?: SubtitleStyle,
+  overlays?: ImageOverlay[],
+  overlayTime?: number,
+  overlayGuides?: boolean
 ) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
@@ -190,6 +237,9 @@ export function drawCamera(
     const dw = (iw / src.sw) * canvas.width
     const dh = (ih / src.sh) * canvas.height
     ctx.drawImage(image, ix, iy, iw, ih, dx, dy, dw, dh)
+  }
+  if (overlays?.length && overlayTime != null) {
+    drawOverlays(canvas, ctx, overlays, overlayTime, { guides: overlayGuides })
   }
   if (captionPoint) {
     getAllCaptions(captionPoint).forEach((cap, i) => {
@@ -251,7 +301,7 @@ export function drawNarrationSubtitle(
   const [mainText = '', subText = ''] = text.split('\n')
   ctx.font = `700 ${fontSize}px ${fontFamily}`
   const mainLines = mainText.trim() ? [mainText.trim()] : []
-  const subFontSize = Math.round(fontSize * 0.72)
+  const subFontSize = Math.round(fontSize * (style?.translationScale ?? 0.72))
   ctx.font = `650 ${subFontSize}px ${fontFamily}`
   const trimmedSubText = subText.trim()
   const subLines = trimmedSubText
@@ -270,22 +320,56 @@ export function drawNarrationSubtitle(
   const shadowEnabled = style?.shadowEnabled ?? true
   const shadowBlur = style?.shadowBlur ?? 10
   const shadowOpacity = style?.shadowOpacity ?? 0.9
+
+  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+
+  // ── 半透明背景條 ────────────────────────────────────────────────
+  if ((style?.backgroundEnabled ?? false) && totalHeight > 0) {
+    ctx.font = `700 ${fontSize}px ${fontFamily}`
+    let maxWidth = mainLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), 0)
+    ctx.font = `650 ${subFontSize}px ${fontFamily}`
+    maxWidth = subLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), maxWidth)
+    const padX = Math.round(fontSize * 0.5)
+    const padY = Math.round(fontSize * 0.3)
+    const boxW = Math.min(canvas.width * 0.96, maxWidth + padX * 2)
+    const boxH = totalHeight + padY * 2
+    ctx.fillStyle = `rgba(0,0,0,${style?.backgroundOpacity ?? 0.45})`
+    roundRect(ctx, cx - boxW / 2, centerY - boxH / 2, boxW, boxH, Math.round(fontSize * 0.25))
+    ctx.fill()
+  }
+
   ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${shadowOpacity})` : 'transparent'
   ctx.shadowBlur = shadowEnabled ? shadowBlur : 0
   ctx.shadowOffsetX = shadowEnabled ? 2 : 0
   ctx.shadowOffsetY = shadowEnabled ? 2 : 0
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = style?.color ?? '#ffffff'
 
-  const totalHeight = Math.max(0, mainLines.length * lineHeight + subLines.length * subLineHeight)
+  const strokeEnabled = style?.strokeEnabled ?? false
+  if (strokeEnabled) {
+    ctx.strokeStyle = style?.strokeColor ?? '#000000'
+    ctx.lineWidth = Math.max(1, (style?.strokeWidth ?? 4) / 1080 * canvas.width)
+    ctx.lineJoin = 'round'
+  }
+  const drawLine = (line: string, x: number, y: number) => {
+    if (strokeEnabled) {
+      // 描邊不帶陰影，避免疊出雙重黑邊
+      const sc = ctx.shadowColor
+      ctx.shadowColor = 'transparent'
+      ctx.strokeText(line, x, y)
+      ctx.shadowColor = sc
+    }
+    ctx.fillText(line, x, y)
+  }
+
   let y = centerY - totalHeight / 2 + lineHeight / 2
   ctx.font = `700 ${fontSize}px ${fontFamily}`
   for (const line of mainLines) {
-    ctx.fillText(line, cx, y)
+    drawLine(line, cx, y)
     y += lineHeight
   }
   ctx.font = `650 ${subFontSize}px ${fontFamily}`
   for (const line of subLines) {
-    ctx.fillText(line, cx, y - (lineHeight - subLineHeight) / 2)
+    drawLine(line, cx, y - (lineHeight - subLineHeight) / 2)
     y += subLineHeight
   }
 
@@ -305,6 +389,22 @@ export function drawCaption(
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
+  // 描邊設定（strokeWidth 以 1080 輸出寬為基準換算）
+  const strokeEnabled = cap.strokeEnabled === true
+  if (strokeEnabled) {
+    ctx.strokeStyle = cap.strokeColor || '#000000'
+    ctx.lineWidth = Math.max(0.5, (cap.strokeWidth ?? 4) / OUTPUT_W * canvas.width)
+    ctx.lineJoin = 'round'
+  }
+  const fillLine = (line: string, x: number, y: number) => {
+    if (strokeEnabled) {
+      const sc = ctx.shadowColor
+      ctx.shadowColor = 'transparent'
+      ctx.strokeText(line, x, y)
+      ctx.shadowColor = sc
+    }
+    ctx.fillText(line, x, y)
+  }
   if (hasText) {
     // ── Shadow box (hideable) ─────────────────────────────────────────
     if (cap.shadowBoxVisible !== false) {
@@ -313,51 +413,37 @@ export function drawCaption(
       ctx.fill()
     }
     let y = layout.cy - layout.textH / 2
+    // ── 文字陰影：與旁白字幕卡片相同的模型（開關＋模糊＋透明度，固定 offset 2,2、黑色）──
+    const shadowEnabled = cap.textShadowEnabled ?? true
+    ctx.shadowColor = shadowEnabled ? `rgba(0,0,0,${cap.textShadowOpacity ?? 0.7})` : 'transparent'
+    ctx.shadowBlur = shadowEnabled ? (cap.textShadowBlur ?? 10) : 0
+    ctx.shadowOffsetX = shadowEnabled ? 2 : 0
+    ctx.shadowOffsetY = shadowEnabled ? 2 : 0
     // ── Main caption ──────────────────────────────────────────────────
     if (layout.mainLines.length) {
       ctx.font = `800 ${layout.mainSize}px ${layout.fontFamily}`
-      ctx.fillStyle = 'white'
-      const mainDist = cap.textShadowDistance ?? 0
-      if (mainDist > 0) {
-        const rad = ((cap.textShadowAngle ?? 120) * Math.PI) / 180
-        ctx.shadowOffsetX = mainDist * Math.cos(rad)
-        ctx.shadowOffsetY = mainDist * Math.sin(rad)
-        ctx.shadowColor = hexToRgba(cap.textShadowColor || '#000000', cap.textShadowAlpha ?? 0.7)
-        ctx.shadowBlur = Math.max(2, mainDist * 0.3)
-      }
+      ctx.fillStyle = cap.textColor || '#ffffff'
       layout.mainLines.forEach(line => {
         const lineY = y + layout.mainLine / 2
-        ctx.fillText(line, layout.cx, lineY)
+        fillLine(line, layout.cx, lineY)
         y += layout.mainLine
       })
-      if (mainDist > 0) {
-        ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0
-      }
     }
     if (layout.mainLines.length && layout.subLines.length) y += layout.gap
     // ── Subtitle ──────────────────────────────────────────────────────
     if (layout.subLines.length) {
       ctx.font = `650 ${layout.subSize}px ${layout.subtitleFontFamily}`
-      ctx.fillStyle = 'rgba(255,255,255,.92)'
-      const subDist = cap.subTextShadowDistance ?? 0
-      if (subDist > 0) {
-        const rad = ((cap.subTextShadowAngle ?? 120) * Math.PI) / 180
-        ctx.shadowOffsetX = subDist * Math.cos(rad)
-        ctx.shadowOffsetY = subDist * Math.sin(rad)
-        ctx.shadowColor = hexToRgba(cap.subTextShadowColor || '#000000', cap.subTextShadowAlpha ?? 0.7)
-        ctx.shadowBlur = Math.max(2, subDist * 0.3)
-      }
+      ctx.fillStyle = hexToRgba(cap.subTextColor || '#ffffff', 0.92)
       layout.subLines.forEach(line => {
         const lineY = y + layout.subLine / 2
-        ctx.fillText(line, layout.cx, lineY)
+        fillLine(line, layout.cx, lineY)
         y += layout.subLine
       })
-      if (subDist > 0) {
-        ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0
-      }
     }
+    ctx.shadowColor = 'transparent'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
   }
   if (includeGuides) {
     drawSnapGuides(canvas, ctx, snapGuide)

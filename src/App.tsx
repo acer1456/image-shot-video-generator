@@ -16,8 +16,9 @@ import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, NarrationTrack, SubtitleCue } from '@/types'
-import { normalizeProjectName, nextFrame } from '@/lib/utils'
+import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
+import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import {
   drawCamera as doDrawCamera,
   getTimelineStateAt, buildTimeline,
@@ -52,10 +53,12 @@ function AppInner() {
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(false)
   const [narrationTrack, setNarrationTrack] = useState<NarrationTrack | null>(null)
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
+  const [imageOverlays, setImageOverlays] = useState<ImageOverlay[]>([])
+  const [overlaysLocked, setOverlaysLocked] = useState(false)
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
-  const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(false)
-  const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(false)
+  const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
+  const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
@@ -80,18 +83,26 @@ function AppInner() {
     narrationInputText,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
+    overlaysLocked,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
+    setImageOverlays,
+    setOverlaysLocked,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
     narrationInputText,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
+    overlaysLocked,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
+    setImageOverlays,
+    setOverlaysLocked,
     triggerRedraw,
   })
 
@@ -101,8 +112,9 @@ function AppInner() {
     const subtitleEnd = store.showNarrationInOutput
       ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
       : 0
-    return Math.max(td, narrationEnd, subtitleEnd)
-  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues])
+    const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
+    return Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
+  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues, imageOverlays])
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -118,9 +130,44 @@ function AppInner() {
     triggerRedraw,
     narrationTrack,
     subtitleCues,
+    imageOverlays,
     showNarration: store.showNarrationInOutput,
     showCameraCaptions: store.showCameraCaptionsInOutput,
   })
+
+  // ---------- 疊加圖片 ----------
+  const handleOverlayImageFile = useCallback(async (file: File) => {
+    try {
+      const dataUrl = await fileToOverlayDataUrl(file)
+      const overlay: ImageOverlay = {
+        id: crypto.randomUUID(),
+        name: file.name.replace(/\.[^.]+$/, '') || '圖片',
+        dataUrl,
+        x: 0.5,
+        y: 0.35,
+        scale: 0.4,
+        opacity: 1,
+        startTime: Math.max(0, currentTimeRef.current),
+        duration: 4,
+      }
+      getOverlayImage(overlay, triggerRedraw)
+      setImageOverlays(prev => [...prev, overlay])
+      triggerRedraw()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '疊加圖片載入失敗')
+    }
+  }, [triggerRedraw])
+
+  const handleOverlayChange = useCallback((id: string, patch: Partial<ImageOverlay>) => {
+    setImageOverlays(prev => prev.map(overlay => overlay.id === id ? { ...overlay, ...patch } : overlay))
+    triggerRedraw()
+  }, [triggerRedraw])
+
+  const handleImageOverlaysChange = useCallback((overlays: ImageOverlay[]) => {
+    for (const overlay of overlays) getOverlayImage(overlay, triggerRedraw)
+    setImageOverlays(overlays)
+    triggerRedraw()
+  }, [triggerRedraw])
 
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
     const canvas = getCanvas()
@@ -133,8 +180,8 @@ function AppInner() {
     const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
     const narrationText = getSubtitleRenderText(cue)
     const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style)
-  }, [getCanvas, store, snapGuide, subtitleCues])
+    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false)
+  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays])
 
   const getPointFocusTime = useCallback((pointIndex: number) => {
     const { items } = buildTimeline(store.points)
@@ -324,6 +371,44 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
+  // 把旁白字幕卡片的 SubtitleStyle 對應轉成鏡頭字幕（CaptionData）欄位，套用到目前選取的鏡頭
+  const handleApplySubtitleStyleToCameraCaption = useCallback((style: SubtitleStyle) => {
+    if (store.activeIndex < 0 || !store.points[store.activeIndex]) {
+      alert('請先在時間軸或鏡頭列表選擇一個鏡頭')
+      return
+    }
+    // 鏡頭字幕主字 = 56px × scale（以 1080 輸出寬為基準）；字幕卡片主字 = fontSizeRatio × 1080
+    const scale = clamp(style.fontSizeRatio * OUTPUT_W / 56, 0.3, 3)
+    // 副字 = 34px × scale × subtitleScale，要等於主字 × translationScale
+    const subtitleScale = clamp(style.translationScale * 56 / 34, 0.3, 3)
+    const patch: Partial<CaptionData> = {
+      fontFamily: style.fontFamily,
+      subtitleFontFamily: style.fontFamily,
+      scale,
+      subtitleScale,
+      x: style.subtitlePosition.x,
+      y: style.subtitlePosition.y,
+      textColor: style.color,
+      subTextColor: style.color,
+      strokeEnabled: style.strokeEnabled,
+      strokeColor: style.strokeColor,
+      strokeWidth: style.strokeWidth,
+      shadowBoxVisible: style.backgroundEnabled,
+      shadowColor: '#000000',
+      shadowAlpha: style.backgroundOpacity,
+      // 陰影參數模型已與字幕卡片一致，直接一對一對應
+      textShadowEnabled: style.shadowEnabled,
+      textShadowBlur: style.shadowBlur,
+      textShadowOpacity: style.shadowOpacity,
+    }
+    let next = store.points
+    for (const [field, value] of Object.entries(patch)) {
+      next = store.updateCaptionField(store.activeIndex, field as keyof CaptionData, value as never, next)
+    }
+    store.rememberCaptionStyle(store.activeIndex, next)
+    triggerRedraw()
+  }, [store, triggerRedraw])
+
   const handleNarrationAiStoryApply = useCallback((result: NarrationAIStoryResult) => {
     setNarrationInputText(result.narrationInputText)
   }, [])
@@ -467,6 +552,9 @@ function AppInner() {
     narrationText: getSubtitleRenderText(currentSubtitleCue) || undefined,
     subtitleStyle: currentSubtitleCue?.style,
     onSubtitlePositionChange: updateActiveSubtitleStyle,
+    imageOverlays,
+    overlaysLocked,
+    onOverlayChange: handleOverlayChange,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
   return (
@@ -482,10 +570,13 @@ function AppInner() {
         points={store.points}
         backgroundSettings={store.backgroundSettings}
         projectName={store.projectName}
+        activeTab={store.activeTab}
+        onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
         onProjectNameChange={name => store.setProjectName(normalizeProjectName(name))}
         onImageFile={file => store.loadImageFile(file, !store.image, store.imageUrl)}
+        onOverlayImageFile={handleOverlayImageFile}
         onLoadFile={loadProject}
         onOpenMasterworkPicker={() => setIsMasterworkPickerOpen(true)}
         onOpenAiPanel={() => setIsAiPanelOpen(true)}
@@ -495,8 +586,8 @@ function AppInner() {
         onRequestFullscreen={requestFullscreen}
       />
 
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-3">
-        <div className="flex flex-1 min-h-0 overflow-hidden gap-3">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto lg:overflow-hidden p-2 gap-2">
+        <div className="flex flex-col lg:flex-row flex-1 lg:min-h-0 gap-2">
           <NarrationSidebar
             track={narrationTrack}
             onTrackChange={handleNarrationTrackChange}
@@ -509,6 +600,7 @@ function AppInner() {
             image={store.image}
             onApplyAiStory={handleNarrationAiStoryApply}
             onApplyAiCamera={handleNarrationAiCameraApply}
+            onApplyStyleToCameraCaption={handleApplySubtitleStyleToCameraCaption}
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />
@@ -516,7 +608,6 @@ function AppInner() {
             isDisabled={isDisabled}
             hasImage={!!store.image}
             activeTab={store.activeTab}
-            onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
             onOpenImmersiveMode={openImmersiveMode}
             showAllPoints={store.showAllPoints}
             onlyActiveBox={store.onlyActiveBox}
@@ -600,7 +691,7 @@ function AppInner() {
           />
         </div>
 
-        <div className="flex-shrink-0 rounded-xl border border-border bg-card p-3">
+        <div className="flex-shrink-0 rounded-2xl border border-border bg-card p-3">
           <TimelinePanel
             ref={timelinePanelRef}
             points={store.points}
@@ -634,6 +725,10 @@ function AppInner() {
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             onSubtitleSelect={setActiveSubtitleId}
+            imageOverlays={imageOverlays}
+            onImageOverlaysChange={handleImageOverlaysChange}
+            overlaysLocked={overlaysLocked}
+            onToggleOverlaysLocked={() => setOverlaysLocked(v => !v)}
           />
         </div>
       </div>
@@ -689,7 +784,7 @@ function AppInner() {
 
 export default function App() {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="artful-theme">
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} storageKey="artful-theme">
       <AppInner />
     </ThemeProvider>
   )
