@@ -20,58 +20,57 @@ export function getOverlayImage(overlay: ImageOverlay, onLoad?: () => void): HTM
   return entry.loaded ? entry.img : null
 }
 
+// 只保留仍存在的疊加圖快取項；其餘（已刪除／已換圖）連同已解碼圖片一併釋放。
+export function pruneOverlayImageCache(keepIds: Set<string>) {
+  for (const id of overlayImageCache.keys()) {
+    if (!keepIds.has(id)) overlayImageCache.delete(id)
+  }
+}
+
 export function isOverlayActiveAt(overlay: ImageOverlay, time: number) {
   return time >= overlay.startTime && time < overlay.startTime + overlay.duration
+}
+
+/**
+ * 疊加圖的高寬比。要等圖解碼完才知道，所以這是排版的隱藏輸入——
+ * layersFor 透過 Target.overlayRatio 把它變成明確的接縫。
+ */
+export function getOverlayRatio(overlay: ImageOverlay) {
+  const entry = overlayImageCache.get(overlay.id)
+  return entry?.loaded && entry.img.naturalWidth > 0
+    ? entry.img.naturalHeight / entry.img.naturalWidth
+    : 1
 }
 
 export function getOverlayCanvasRect(
   canvas: { width: number; height: number },
   overlay: ImageOverlay,
 ) {
-  const entry = overlayImageCache.get(overlay.id)
-  const ratio = entry?.loaded && entry.img.naturalWidth > 0
-    ? entry.img.naturalHeight / entry.img.naturalWidth
-    : 1
+  const ratio = getOverlayRatio(overlay)
   const w = overlay.scale * canvas.width
   const h = w * ratio
   return { x: overlay.x * canvas.width - w / 2, y: overlay.y * canvas.height - h / 2, w, h }
 }
 
-export function drawOverlays(
-  canvas: HTMLCanvasElement,
+export function paintOverlayGuides(
   ctx: CanvasRenderingContext2D,
-  overlays: ImageOverlay[],
-  time: number,
-  options?: { guides?: boolean; onImageLoad?: () => void },
+  rect: { x: number; y: number; w: number; h: number },
 ) {
-  for (const overlay of overlays) {
-    if (!isOverlayActiveAt(overlay, time)) continue
-    const img = getOverlayImage(overlay, options?.onImageLoad)
-    const rect = getOverlayCanvasRect(canvas, overlay)
-    if (img) {
-      ctx.save()
-      ctx.globalAlpha = clamp(overlay.opacity, 0, 1)
-      ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h)
-      ctx.restore()
-    }
-    if (options?.guides) {
-      ctx.save()
-      ctx.setLineDash([12, 10])
-      ctx.lineWidth = 4
-      ctx.strokeStyle = 'rgba(236,72,153,.9)'
-      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h)
-      ctx.setLineDash([])
-      // 右下角縮放 handle
-      ctx.beginPath()
-      ctx.arc(rect.x + rect.w, rect.y + rect.h, 16, 0, Math.PI * 2)
-      ctx.fillStyle = 'white'
-      ctx.fill()
-      ctx.strokeStyle = '#ec4899'
-      ctx.lineWidth = 5
-      ctx.stroke()
-      ctx.restore()
-    }
-  }
+  ctx.save()
+  ctx.setLineDash([12, 10])
+  ctx.lineWidth = 4
+  ctx.strokeStyle = 'rgba(236,72,153,.9)'
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  ctx.setLineDash([])
+  // 右下角縮放 handle
+  ctx.beginPath()
+  ctx.arc(rect.x + rect.w, rect.y + rect.h, 16, 0, Math.PI * 2)
+  ctx.fillStyle = 'white'
+  ctx.fill()
+  ctx.strokeStyle = '#ec4899'
+  ctx.lineWidth = 5
+  ctx.stroke()
+  ctx.restore()
 }
 
 /** 由上而下找命中的疊加圖（後加的先命中）；回傳 hit 類型 */

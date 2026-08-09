@@ -28,3 +28,24 @@ export function decodeAudioB64(b64: string): Float32Array {
   }
   return out
 }
+
+/** 解碼任意音訊檔為單聲道 Float32Array。多聲道取平均。 */
+export async function decodeAudioFile(file: File): Promise<{ audioData: Float32Array; sampleRate: number }> {
+  const ctx = new AudioContext()
+  try {
+    const buffer = await ctx.decodeAudioData(await file.arrayBuffer())
+    const { numberOfChannels, length, sampleRate } = buffer
+    if (numberOfChannels === 1) {
+      return { audioData: buffer.getChannelData(0).slice(), sampleRate }
+    }
+    const audioData = new Float32Array(length)
+    for (let c = 0; c < numberOfChannels; c++) {
+      const channel = buffer.getChannelData(c)
+      for (let i = 0; i < length; i++) audioData[i] += channel[i]
+    }
+    for (let i = 0; i < length; i++) audioData[i] /= numberOfChannels
+    return { audioData, sampleRate }
+  } finally {
+    void ctx.close()
+  }
+}

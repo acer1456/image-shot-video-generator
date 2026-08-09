@@ -5,6 +5,7 @@ import CaptionEditor from '@/components/CaptionEditor'
 import AssistPanel from '@/components/panel/AssistPanel'
 import { Settings, ChevronLeft, ChevronRight, Sparkles, X } from 'lucide-react'
 import type { CameraPoint, CaptionData, ActiveTab, BackgroundSettings } from '@/types'
+import type { Scene } from '@/lib/canvas'
 
 export interface EditorSidebarHandlers {
   // camera panel
@@ -37,7 +38,7 @@ interface EditorSidebarProps {
   activeTab: ActiveTab
   activePoint: CameraPoint | null
   activeCaptionIndex: number
-  image: HTMLImageElement | null
+  scene: Scene
   backgroundSettings: BackgroundSettings
   collapsed: boolean
   onToggleCollapse: () => void
@@ -46,10 +47,10 @@ interface EditorSidebarProps {
 
 export function EditorSidebar({
   points, activeIndex, activeTab, activePoint, activeCaptionIndex,
-  image, backgroundSettings, collapsed, onToggleCollapse,
+  scene, backgroundSettings, collapsed, onToggleCollapse,
   handlers,
 }: EditorSidebarProps) {
-  const hasImage = !!image
+  const hasImage = !!scene.image
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   if (collapsed) {
@@ -125,8 +126,7 @@ export function EditorSidebar({
               points={points}
               activeIndex={activeIndex}
               hasImage={hasImage}
-              image={image}
-              backgroundSettings={backgroundSettings}
+              scene={scene}
               onSelect={handlers.onSelect}
               onRemove={handlers.onRemovePoint}
               onUpdateField={handlers.onUpdateField}

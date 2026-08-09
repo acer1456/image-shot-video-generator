@@ -49,6 +49,18 @@ export interface ImageOverlay {
   duration: number   // 秒
 }
 
+export interface MosaicStrokePoint {
+  x: number
+  y: number
+}
+
+// 馬賽克筆刷：以原圖座標保存，不跟著 9:16 輸出畫面座標移動
+export interface MosaicStroke {
+  id: string
+  brushSize: number
+  points: MosaicStrokePoint[]
+}
+
 export interface BackgroundSettings {
   mode: 'color' | 'blur'
   color: string
@@ -91,6 +103,8 @@ export interface ProjectData {
   narrationInputText?: string
   narrationTrack?: NarrationTrack | null
   subtitleCues?: SubtitleCue[]
+  mosaicStrokes?: MosaicStroke[]
+  showMosaicInOutput?: boolean
 }
 
 export interface DragState {

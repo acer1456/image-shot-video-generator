@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { ModelCombobox } from '@/components/ModelCombobox'
 import {
-  fetchOpenRouterModels, generateWithAi, SYSTEM_PROMPT,
-  type AiGenerateResult, type OpenRouterModelInfo, type PaintingInfo,
+  generateWithAi, SYSTEM_PROMPT,
+  type AiGenerateResult, type PaintingInfo,
 } from '@/lib/openrouter'
-import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ChevronDown, RefreshCw, FileText, RotateCcw } from 'lucide-react'
+import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, FileText, RotateCcw } from 'lucide-react'
 
 const LS_KEY_KEY        = 'openrouter_api_key'
 const LS_KEY_MODEL      = 'openrouter_model'
@@ -50,164 +51,6 @@ function imageToDataUrl(img: HTMLImageElement): string {
   canvas.height = Math.round(img.naturalHeight * scale)
   canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
   return canvas.toDataURL('image/jpeg', 0.85)
-}
-
-function formatPrice(p: string): string {
-  const n = parseFloat(p)
-  if (!n || isNaN(n)) return '免費'
-  const per1m = n * 1_000_000
-  return per1m < 0.01 ? `$${per1m.toFixed(4)}/1M` : `$${per1m.toFixed(2)}/1M`
-}
-
-// ── Model Combobox ────────────────────────────────────────────────────────────────────────────
-interface ModelComboboxProps {
-  apiKey: string
-  selectedId: string
-  selectedName: string
-  onSelect: (id: string, name: string) => void
-}
-
-function ModelCombobox({ apiKey, selectedId, selectedName, onSelect }: ModelComboboxProps) {
-  const [models, setModels]           = useState<OpenRouterModelInfo[]>([])
-  const [fetchStatus, setFetchStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
-  const [fetchError, setFetchError]   = useState('')
-  const [query, setQuery]             = useState('')
-  const [isOpen, setIsOpen]           = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef     = useRef<HTMLInputElement>(null)
-
-  const loadModels = useCallback(async () => {
-    if (!apiKey.trim()) return
-    setFetchStatus('loading')
-    setFetchError('')
-    try {
-      const list = await fetchOpenRouterModels(apiKey.trim())
-      setModels(list)
-      setFetchStatus('done')
-    } catch (e) {
-      setFetchError(e instanceof Error ? e.message : '載入失敗')
-      setFetchStatus('error')
-    }
-  }, [apiKey])
-
-  // Auto-load when first opened and key is ready
-  useEffect(() => {
-    if (isOpen && fetchStatus === 'idle' && apiKey.trim()) loadModels()
-  }, [isOpen, fetchStatus, apiKey, loadModels])
-
-  // Click outside → close
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false); setQuery('')
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  const filtered = query.trim()
-    ? models.filter(m =>
-        m.id.toLowerCase().includes(query.toLowerCase()) ||
-        m.name.toLowerCase().includes(query.toLowerCase())
-      )
-    : models
-
-  function openDropdown() {
-    setIsOpen(true)
-    setTimeout(() => inputRef.current?.focus(), 10)
-  }
-
-  function selectModel(m: OpenRouterModelInfo) {
-    onSelect(m.id, m.name)
-    setIsOpen(false)
-    setQuery('')
-  }
-
-  const displayLabel = selectedName || selectedId || '選擇模型…'
-
-  return (
-    <div ref={containerRef} className="relative">
-      {/* Trigger */}
-      <button
-        type="button" onClick={openDropdown}
-        className="w-full h-9 px-3 flex items-center gap-2 rounded-lg border border-input bg-background text-sm text-left hover:bg-accent transition-colors"
-      >
-        <span className="flex-1 truncate text-foreground">{displayLabel}</span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      </button>
-
-      {/* Dropdown */}
-      {isOpen && (
-        <div className="absolute z-50 mt-1 w-full rounded-xl border border-border bg-card shadow-xl overflow-hidden">
-          {/* Search + refresh */}
-          <div className="flex gap-1 p-2 border-b border-border">
-            <Input
-              ref={inputRef}
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="輸入關鍵字簽選模型…"
-              className="h-8 text-xs flex-1"
-            />
-            <button
-              type="button" title="重新載入模型列表"
-              onClick={() => { setFetchStatus('idle'); loadModels() }}
-              className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md hover:bg-muted transition-colors text-muted-foreground"
-            >
-              {fetchStatus === 'loading'
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <RefreshCw className="h-3.5 w-3.5" />
-              }
-            </button>
-          </div>
-
-          {/* List */}
-          <div className="max-h-56 overflow-y-auto">
-            {fetchStatus === 'loading' && (
-              <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />正在從 OpenRouter 載入模型列表…
-              </div>
-            )}
-            {fetchStatus === 'error' && (
-              <div className="px-3 py-4 text-xs text-destructive text-center">{fetchError}</div>
-            )}
-            {fetchStatus !== 'loading' && fetchStatus !== 'done' && !apiKey.trim() && (
-              <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                請先輸入 API Key 以載入模型列表
-              </div>
-            )}
-            {fetchStatus === 'done' && filtered.length === 0 && (
-              <div className="px-3 py-4 text-xs text-muted-foreground text-center">無符合結果</div>
-            )}
-            {fetchStatus === 'done' && filtered.map(m => {
-              const promptPrice = formatPrice(m.pricing?.prompt ?? '0')
-              return (
-                <button
-                  key={m.id} type="button" onClick={() => selectModel(m)}
-                  className={`w-full px-3 py-2 flex flex-col items-start text-left hover:bg-accent transition-colors border-b border-border/40 last:border-0
-                    ${m.id === selectedId ? 'bg-primary/10' : ''}`}
-                >
-                  <span className="text-xs font-medium truncate w-full">{m.name || m.id}</span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] text-muted-foreground truncate flex-1">{m.id}</span>
-                    <span className={`text-[10px] shrink-0 font-mono ${promptPrice === '免費' ? 'text-green-500' : 'text-muted-foreground'}`}>
-                      {promptPrice}
-                    </span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-
-          {fetchStatus === 'done' && (
-            <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border bg-muted/30">
-              共 {filtered.length} / {models.length} 個視覺模型
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ── Main Panel ────────────────────────────────────────────────────────────────────────────
