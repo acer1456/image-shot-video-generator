@@ -14,6 +14,7 @@ import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
 import { Button } from '@/components/ui/button'
 import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
+import { useHistory } from '@/hooks/useHistory'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
 import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
@@ -38,7 +39,6 @@ function AppInner() {
   const currentTimeRef = useRef(0)
   const previewCancelRef = useRef(false)
   const timelinePanelRef = useRef<TimelinePanelHandle>(null)
-  const lastUiUpdateRef = useRef(0)
   const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
   const [forceRedraw, setForceRedraw] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
@@ -149,6 +149,30 @@ function AppInner() {
   ])
 
   const totalDuration = useMemo(() => sceneDuration(scene), [scene])
+
+  // ---------- 返回上一步 ----------
+  // 這五樣＋背景就是「專案內容」，全部走不可變更新，所以整包記快照很便宜。
+  const historyDoc = useMemo(() => ({
+    points: store.points,
+    backgroundSettings: store.backgroundSettings,
+    narrationTrack,
+    subtitleCues,
+    imageOverlays,
+    mosaicStrokes,
+  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes])
+
+  const restoreSnapshot = useCallback((snapshot: typeof historyDoc) => {
+    store.setPoints(snapshot.points)
+    store.setActiveIndex(index => Math.min(index, snapshot.points.length - 1))
+    store.setBackgroundSettings(snapshot.backgroundSettings)
+    handleNarrationTrackChange(snapshot.narrationTrack)
+    setSubtitleCues(snapshot.subtitleCues)
+    setImageOverlays(snapshot.imageOverlays)
+    setMosaicStrokes(snapshot.mosaicStrokes)
+    triggerRedraw()
+  }, [store, handleNarrationTrackChange, triggerRedraw])
+
+  const { undo, redo, canUndo, canRedo } = useHistory(historyDoc, restoreSnapshot)
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -294,12 +318,8 @@ function AppInner() {
       timelinePanelRef.current?.setTimeCursor(t)
       timelinePanelRef.current?.revealTime(t, false)
       currentTimeRef.current = t
-      // Throttle React state update (~15fps) — only drives the time display text
-      const now = performance.now()
-      if (now - lastUiUpdateRef.current >= 66) {
-        setCurrentTime(t)
-        lastUiUpdateRef.current = now
-      }
+      // 播放中完全不碰 React state：游標與讀數都由 setTimeCursor 直接寫 DOM。
+      // 之前每 66ms setCurrentTime 一次，會連帶重繪整個側欄的鏡頭清單。
       if (t >= totalDuration) break
       await nextFrame()
     }
@@ -658,6 +678,10 @@ function AppInner() {
         onSave={saveProject}
         onClearPoints={() => store.clearPoints()}
         onRequestFullscreen={requestFullscreen}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={canUndo}
+        canRedo={canRedo}
       />
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto lg:overflow-hidden p-2 gap-2">

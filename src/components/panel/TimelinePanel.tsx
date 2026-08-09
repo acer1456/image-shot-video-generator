@@ -6,6 +6,8 @@ import type { CameraPoint, ImageOverlay, NarrationTrack, SubtitleCue } from '@/t
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { formatTime } from '@/lib/utils'
 import { buildTimeline } from '@/lib/canvas'
+import { rippleRow, type Clip } from '@/lib/ripple'
+import { splitNarrationAt } from '@/lib/narration'
 import { useTheme } from 'next-themes'
 import { Play, Pause, ChevronsUpDown, ChevronsDownUp, Trash2, Lock, LockOpen } from 'lucide-react'
 
@@ -20,6 +22,8 @@ type RichAction = TimelineAction & {
     segmentId?: string
     overlayId?: string
     waveform?: number[]
+    /** 旁白：音訊本身的長度（秒），拉伸不得超過 */
+    maxDuration?: number
   }
 }
 
@@ -54,6 +58,23 @@ const ROW_LABELS: Record<string, string> = {
 }
 
 const NUM_ROWS = 5
+
+/** 最短片段長度（秒）——縮到比這短就當作這麼長 */
+const MIN_CLIP = 0.1
+
+/** 旁白可拉到的最長長度＝音訊本身長度（拿不到就用當下長度，等於不准變長） */
+function narrationMax(action: TimelineAction): number {
+  return (action as RichAction).data?.maxDuration ?? action.end - action.start
+}
+
+/** 把 anchor 放到拖曳後的新位置，再把同列其他片段推開，回傳 id → 新位置 */
+function layoutRow(clips: Clip[], anchorId: string, start: number, end: number): Map<string, Clip> {
+  const anchorStart = Math.max(0, start)
+  const next = clips.map(clip => clip.id === anchorId
+    ? { ...clip, start: anchorStart, end: Math.max(anchorStart + MIN_CLIP, end) }
+    : clip)
+  return new Map(rippleRow(next, anchorId).map(clip => [clip.id, clip]))
+}
 
 /** Pixels rendered for 1-second scale mark */
 const SCALE_WIDTH  = 80
@@ -135,6 +156,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const rootRef     = useRef<HTMLDivElement>(null)
   const lastScrollLeftRef = useRef(0)
   const pendingScrollLeftRef = useRef<number | null>(null)
+  const readoutRef  = useRef<HTMLSpanElement>(null)
 
   // ── Row order + local music state ────────────────────────────────────────
   const [rowOrder, setRowOrder]     = useState<string[]>([ROW_CAMERA, ROW_OVERLAY, ROW_NARRATION, ROW_SUBTITLE, ROW_MUSIC])
@@ -181,7 +203,12 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   // Expose imperative cursor control so the parent can move the playhead
   // directly every rAF frame without triggering a React re-render
   useImperativeHandle(ref, () => ({
-    setTimeCursor: (time: number) => { timelineRef.current?.setTime(time) },
+    setTimeCursor: (time: number) => {
+      timelineRef.current?.setTime(time)
+      // 讀數也走命令式。播放時若靠 state 更新，整棵 App（含 N 個鏡頭卡片）
+      // 每秒要重繪十幾次，鏡頭一多就把主執行緒塞死。
+      if (readoutRef.current) readoutRef.current.textContent = formatTime(time)
+    },
     revealTime,
   }), [revealTime])
 
@@ -218,6 +245,8 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
 
   const narrationActions = useMemo<TimelineAction[]>(() => {
     if (!narrationTrack || narrationTrack.duration <= 0) return []
+    const audioSeconds = (data: Float32Array | undefined, rate: number | undefined) =>
+      data?.length && rate ? data.length / rate : undefined
     if (narrationTrack.segments.length) {
       return narrationTrack.segments.map((segment, index) => ({
         id:       `narration-${segment.id}`,
@@ -225,7 +254,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
         end:      narrationTrack.startTime + segment.startTime + segment.duration,
         effectId: 'narration',
         movable:  true,
-        flexible: false,
+        flexible: true,
         data: {
           label: segment.text.slice(0, 24) || `旁白 ${index + 1}`,
           pointIndex: index,
@@ -233,6 +262,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
           trackId: narrationTrack.id,
           segmentId: segment.id,
           waveform: buildWaveformPeaks(segment.audioData),
+          maxDuration: audioSeconds(segment.audioData, segment.samplingRate ?? narrationTrack.samplingRate) ?? segment.duration,
         },
       } as RichAction as TimelineAction))
     }
@@ -242,13 +272,14 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
       end:      narrationTrack.startTime + narrationTrack.duration,
       effectId: 'narration',
       movable:  true,
-      flexible: false,
+      flexible: true,
       data: {
         label: '旁白音訊',
         pointIndex: -1,
         type: 'narration',
         trackId: narrationTrack.id,
         waveform: buildWaveformPeaks(narrationTrack.audioData),
+        maxDuration: audioSeconds(narrationTrack.audioData, narrationTrack.samplingRate) ?? narrationTrack.duration,
       },
     } as RichAction as TimelineAction]
   }, [narrationTrack])
@@ -391,11 +422,12 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
   const handleResizing = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }): boolean | void => {
       const { row, dir, action, start, end } = params
-      if (row.id === ROW_CAMERA) {
-        if (dir === 'left') return false
-      }
-      if (row.id === ROW_NARRATION) return false
+      // 鏡頭列連續排版、旁白沒有音訊 head offset → 只給右邊界拉伸
+      // ponytail: 旁白要左邊 trim 得先在 segment 存音訊起點，等真的有人要再說
+      if ((row.id === ROW_CAMERA || row.id === ROW_NARRATION) && dir === 'left') return false
       if (row.id === ROW_OVERLAY && overlaysLocked) return false
+      // 旁白拉到音訊原長就停住，再拉也不會變長
+      if (row.id === ROW_NARRATION && end - start > narrationMax(action)) return false
       formatDragReadout(action, start, end)
       return undefined
     },
@@ -410,83 +442,102 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
     [formatDragReadout],
   )
 
-  const handleResizeEnd = useCallback(
-    (params: { action: TimelineAction; row: TimelineRow; start: number; end: number; dir: 'right' | 'left' }) => {
-      setDragReadout(null)
-      const { action, row, start, end } = params
-      const rich = action as RichAction
-      if (row.id === ROW_CAMERA) {
-        if (rich.data?.pointIndex === undefined) return
-        const newDuration = Math.max(0.1, end - start)
-        if (rich.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, newDuration)
-        else if (rich.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, newDuration)
-      } else if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
-        const cueId = rich.data?.cueId
-        if (cueId) {
-          const newDuration = Math.max(0.1, end - start)
-          onSubtitleCuesChange(subtitleCues.map(cue =>
-            cue.id === cueId ? { ...cue, startTime: start, duration: newDuration } : cue
-          ))
-        }
-      } else if (row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
-        const overlayId = rich.data?.overlayId
-        if (overlayId) {
-          onImageOverlaysChange(imageOverlays.map(overlay =>
-            overlay.id === overlayId
-              ? { ...overlay, startTime: Math.max(0, start), duration: Math.max(0.2, end - start) }
-              : overlay
-          ))
-        }
-      } else if (row.id === ROW_MUSIC) {
-        setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
-      } else {
-        setSnapKey(k => k + 1)
-      }
-    },
-    [onHoldDurationChange, onMoveDurationChange, subtitleCues, onSubtitleCuesChange, imageOverlays, onImageOverlaysChange],
-  )
-
-  const handleMoveEnd = useCallback(
+  // Move 與 resize 收尾走同一條路：把整列的新位置算出來（含推開鄰居）再寫回。
+  const commitAction = useCallback(
     (params: { action: TimelineAction; row: TimelineRow; start: number; end: number }) => {
       setDragReadout(null)
       const { action, row, start, end } = params
       const rich = action as RichAction
+
+      if (row.id === ROW_CAMERA) {
+        // 鏡頭列是連續排版，位置全由 store 推導，只吃時長變更
+        if (rich.data?.pointIndex === undefined) { setSnapKey(k => k + 1); return }
+        const newDuration = Math.max(MIN_CLIP, end - start)
+        if (rich.effectId === 'hold')      onHoldDurationChange(rich.data.pointIndex, newDuration)
+        else if (rich.effectId === 'move') onMoveDurationChange(rich.data.pointIndex, newDuration)
+        else setSnapKey(k => k + 1)
+        return
+      }
+
       if (row.id === ROW_NARRATION && narrationTrack && onNarrationTrackChange) {
         const segmentId = rich.data?.segmentId
-        if (segmentId) {
-          const nextSegments = narrationTrack.segments.map(segment =>
-            segment.id === segmentId ? { ...segment, startTime: Math.max(0, start - narrationTrack.startTime) } : segment
-          )
-          const duration = nextSegments.reduce((max, segment) => Math.max(max, segment.startTime + segment.duration), 0)
-          onNarrationTrackChange({ ...narrationTrack, duration, segments: nextSegments })
-        } else {
-          onNarrationTrackChange({ ...narrationTrack, startTime: Math.max(0, start) })
+        // 拉伸封頂在音訊原長
+        const cappedEnd = Math.min(end, start + narrationMax(action))
+        if (!segmentId) {
+          onNarrationTrackChange({
+            ...narrationTrack,
+            startTime: Math.max(0, start),
+            duration:  Math.max(MIN_CLIP, cappedEnd - start),
+          })
+          return
         }
-      } else if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
-        const cueId = rich.data?.cueId
-        if (cueId) {
-          const duration = end - start
-          onSubtitleCuesChange(subtitleCues.map(cue =>
-            cue.id === cueId ? { ...cue, startTime: start, duration: Math.max(0.1, duration) } : cue
-          ))
-        }
-      } else if (row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
-        const overlayId = rich.data?.overlayId
-        if (overlayId) {
-          onImageOverlaysChange(imageOverlays.map(overlay =>
-            overlay.id === overlayId
-              ? { ...overlay, startTime: Math.max(0, start), duration: Math.max(0.2, end - start) }
-              : overlay
-          ))
-        }
-      } else if (row.id === ROW_MUSIC) {
-        setLocalMusic(prev => prev.map(a => a.id === action.id ? { ...a, start, end } : a))
-      } else {
-        // Camera: snap back (positions are fully derived from store)
-        setSnapKey(k => k + 1)
+        const clips = narrationTrack.segments.map(segment => ({
+          id:    `narration-${segment.id}`,
+          start: narrationTrack.startTime + segment.startTime,
+          end:   narrationTrack.startTime + segment.startTime + segment.duration,
+        }))
+        const next = layoutRow(clips, String(action.id), start, cappedEnd)
+        const nextSegments = narrationTrack.segments.map(segment => {
+          const clip = next.get(`narration-${segment.id}`)!
+          return {
+            ...segment,
+            startTime: Math.max(0, clip.start - narrationTrack.startTime),
+            duration:  clip.end - clip.start,
+          }
+        })
+        const duration = nextSegments.reduce((max, segment) => Math.max(max, segment.startTime + segment.duration), 0)
+        onNarrationTrackChange({ ...narrationTrack, duration, segments: nextSegments })
+        return
       }
+
+      if (row.id === ROW_SUBTITLE && onSubtitleCuesChange && subtitleCues) {
+        const clips = subtitleCues.map(cue => ({
+          id: `subtitle-${cue.id}`, start: cue.startTime, end: cue.startTime + cue.duration,
+        }))
+        const next = layoutRow(clips, String(action.id), start, end)
+        onSubtitleCuesChange(subtitleCues.map(cue => {
+          const clip = next.get(`subtitle-${cue.id}`)!
+          return { ...cue, startTime: clip.start, duration: clip.end - clip.start }
+        }))
+        return
+      }
+
+      if (row.id === ROW_OVERLAY && onImageOverlaysChange && imageOverlays) {
+        const clips = imageOverlays.map(overlay => ({
+          id: `overlay-${overlay.id}`, start: overlay.startTime, end: overlay.startTime + overlay.duration,
+        }))
+        const next = layoutRow(clips, String(action.id), start, end)
+        onImageOverlaysChange(imageOverlays.map(overlay => {
+          const clip = next.get(`overlay-${overlay.id}`)!
+          return { ...overlay, startTime: clip.start, duration: clip.end - clip.start }
+        }))
+        return
+      }
+
+      if (row.id === ROW_MUSIC) {
+        setLocalMusic(prev => {
+          const next = layoutRow(prev.map(a => ({ id: String(a.id), start: a.start, end: a.end })), String(action.id), start, end)
+          return prev.map(a => ({ ...a, ...next.get(String(a.id))!, id: a.id }))
+        })
+        return
+      }
+
+      setSnapKey(k => k + 1)
     },
-    [narrationTrack, onNarrationTrackChange, subtitleCues, onSubtitleCuesChange, imageOverlays, onImageOverlaysChange],
+    [onHoldDurationChange, onMoveDurationChange, narrationTrack, onNarrationTrackChange,
+     subtitleCues, onSubtitleCuesChange, imageOverlays, onImageOverlaysChange],
+  )
+
+  // 右鍵旁白片段 → 在游標處剪成兩段
+  const handleContextMenuAction = useCallback(
+    (event: React.MouseEvent, params: { action: TimelineAction; row: TimelineRow; time: number }) => {
+      if (params.row.id !== ROW_NARRATION || !narrationTrack || !onNarrationTrackChange) return
+      event.preventDefault()
+      event.stopPropagation()
+      const next = splitNarrationAt(narrationTrack, params.time)
+      if (next !== narrationTrack) onNarrationTrackChange(next)
+    },
+    [narrationTrack, onNarrationTrackChange],
   )
 
   const handleRowDragEnd = useCallback(
@@ -630,7 +681,7 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
             {isPreviewing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 ml-0.5" />}
           </button>
           <span className="text-xs text-muted-foreground tabular-nums">
-            <span className="text-foreground font-medium">{formatTime(currentTime)}</span>
+            <span ref={readoutRef} className="text-foreground font-medium">{formatTime(currentTime)}</span>
             <span className="mx-1 opacity-50">/</span>
             {formatTime(totalDuration)}
           </span>
@@ -749,13 +800,14 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
               onCursorDragStart={handleCursorDragStart}
               onCursorDrag={handleCursorDrag}
               onActionResizing={handleResizing}
-              onActionResizeEnd={handleResizeEnd}
+              onActionResizeEnd={commitAction}
               onActionMoving={handleMoving}
-              onActionMoveEnd={handleMoveEnd}
+              onActionMoveEnd={commitAction}
               onRowDragEnd={handleRowDragEnd}
               onClickAction={handleClickAction}
               onDoubleClickRow={handleDoubleClickRow}
               onDoubleClickAction={handleDoubleClickAction}
+              onContextMenuAction={handleContextMenuAction}
               getActionRender={(action: TimelineAction, row: TimelineRow) => {
                 const rich = action as RichAction
                 const dur  = (action.end - action.start).toFixed(1)
@@ -763,7 +815,11 @@ export default forwardRef<TimelinePanelHandle, TimelinePanelProps>(function Time
                 const waveform = row.id === ROW_NARRATION ? rich.data?.waveform : undefined
                 return (
                   <div
-                    title={row.id === ROW_MUSIC || row.id === ROW_SUBTITLE ? '雙擊刪除' : undefined}
+                    title={
+                      row.id === ROW_NARRATION ? '右鍵剪一刀，雙擊刪除'
+                      : row.id === ROW_MUSIC || row.id === ROW_SUBTITLE ? '雙擊刪除'
+                      : undefined
+                    }
                     style={{
                       width: '100%', height: '100%',
                       borderRadius: 3,

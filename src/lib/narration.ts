@@ -232,6 +232,69 @@ export function hasNarrationAudio(track: NarrationTrack | null): boolean {
   return hasSegments || (!!track.audioData && !!track.samplingRate && track.duration > 0)
 }
 
+/** 一刀切開至少要留這麼長，避免點在邊界上切出零長度片段 */
+const MIN_SPLIT_PIECE = 0.05
+
+/**
+ * 在時間軸的 `atTime` 把旁白剪成兩段。切點落在音訊上（不在任何片段內就原樣回傳）。
+ * 還沒切過的整軌會先被視為單一片段，切完就走 segments 那條播放路徑（音訊位置不變）。
+ */
+export function splitNarrationAt(track: NarrationTrack, atTime: number): NarrationTrack {
+  const sampleRate = getNarrationSampleRate(track)
+  const local = atTime - track.startTime
+  const segments: NarrationAudioSegment[] = track.segments.length ? track.segments : [{
+    id: crypto.randomUUID(),
+    text: track.text,
+    startTime: 0,
+    duration: track.duration,
+    audioData: track.audioData,
+    samplingRate: track.samplingRate,
+    pauseAfterMs: 0,
+    wordStartIndex: 0,
+    wordEndIndex: 0,
+  }]
+
+  const index = segments.findIndex(segment =>
+    local > segment.startTime + MIN_SPLIT_PIECE &&
+    local < segment.startTime + segment.duration - MIN_SPLIT_PIECE)
+  if (index < 0) return track
+
+  const segment  = segments[index]
+  const offset   = local - segment.startTime
+  const cutFrame = sampleRate ? Math.round(offset * sampleRate) : 0
+  const tailId   = crypto.randomUUID()
+
+  // 字的時間是相對於軌道起點，切點之後的字改掛到後半段
+  const words = track.words.map(word =>
+    word.segmentId === segment.id && word.startTime >= local ? { ...word, segmentId: tailId } : word)
+  const textOf = (id: string) => words.filter(word => word.segmentId === id).map(word => word.word).join(' ')
+  const hadWords = track.words.some(word => word.segmentId === segment.id)
+
+  const head: NarrationAudioSegment = {
+    ...segment,
+    duration:  offset,
+    audioData: segment.audioData?.subarray(0, cutFrame),
+    text:      hadWords ? textOf(segment.id) : segment.text,
+  }
+  const tail: NarrationAudioSegment = {
+    ...segment,
+    id:        tailId,
+    startTime: segment.startTime + offset,
+    duration:  segment.duration - offset,
+    audioData: segment.audioData?.subarray(cutFrame),
+    // ponytail: 沒有逐字時間就沒法分文字，後半留空白比亂猜好
+    text:      hadWords ? textOf(tailId) : '',
+  }
+
+  return {
+    ...track,
+    segments: [...segments.slice(0, index), head, tail, ...segments.slice(index + 1)],
+    words,
+    phonemes: track.phonemes.map(phoneme =>
+      phoneme.segmentId === segment.id && phoneme.startTime >= local ? { ...phoneme, segmentId: tailId } : phoneme),
+  }
+}
+
 export function createNarrationMixdown(track: NarrationTrack): { audioData: Float32Array; sampleRate: number } | null {
   const sampleRate = getNarrationSampleRate(track)
   if (!sampleRate || !hasNarrationAudio(track)) return null
@@ -243,7 +306,8 @@ export function createNarrationMixdown(track: NarrationTrack): { audioData: Floa
     for (const segment of segmentAudio) {
       const startFrame = Math.max(0, Math.round((track.startTime + segment.startTime) * sampleRate))
       const src = segment.audioData!
-      const count = Math.min(src.length, totalFrames - startFrame)
+      // 片段在時間軸上被 trim 過就只混這麼長
+      const count = Math.min(src.length, Math.round(segment.duration * sampleRate), totalFrames - startFrame)
       for (let i = 0; i < count; i++) audioData[startFrame + i] += src[i]
     }
     for (let i = 0; i < totalFrames; i++) {
@@ -285,10 +349,11 @@ export function scheduleNarrationAudio(
       source.connect(ctx.destination)
       const delay = track.startTime + segment.startTime - fromTime
       if (delay >= 0) {
-        source.start(ctx.currentTime + delay)
+        // 第三個參數＝時間軸上的長度，被 trim 短就提早收掉
+        source.start(ctx.currentTime + delay, 0, segment.duration)
       } else {
-        const offset = Math.min(-delay, segment.duration - 0.01)
-        source.start(ctx.currentTime, Math.max(0, offset))
+        const offset = Math.max(0, Math.min(-delay, segment.duration - 0.01))
+        source.start(ctx.currentTime, offset, Math.max(0.01, segment.duration - offset))
       }
       sourcesRef.current.push(source)
     }
@@ -302,8 +367,11 @@ export function scheduleNarrationAudio(
   source.buffer = buffer
   source.connect(ctx.destination)
   const delay = track.startTime - fromTime
-  if (delay >= 0) source.start(ctx.currentTime + delay)
-  else source.start(ctx.currentTime, Math.max(0, Math.min(-delay, track.duration - 0.01)))
+  if (delay >= 0) source.start(ctx.currentTime + delay, 0, track.duration)
+  else {
+    const offset = Math.max(0, Math.min(-delay, track.duration - 0.01))
+    source.start(ctx.currentTime, offset, Math.max(0.01, track.duration - offset))
+  }
   sourcesRef.current.push(source)
 }
 

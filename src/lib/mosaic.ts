@@ -95,6 +95,9 @@ export function getMosaickedImage(image: HTMLImageElement, strokes: MosaicStroke
   pixCtx.drawImage(mask, 0, 0)
   pixCtx.globalCompositeOperation = 'source-over'
   outCtx.drawImage(pixelated, 0, 0)
+  // 每一筆都是一份原圖大小的 canvas（4000×3000 ≈ 48MB）。塗馬賽克時每移動一點
+  // 就換一個 key，不設上限會在幾秒內把記憶體吃光。只有最後一版會被重複命中。
+  if (imageCache.size >= 2) imageCache.delete(imageCache.keys().next().value!)
   imageCache.set(key, output)
   return output
 }
