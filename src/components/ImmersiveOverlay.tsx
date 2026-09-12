@@ -21,11 +21,13 @@ export function ImmersiveOverlay({ isLeaving, onClose, canvasEditorProps }: Imme
         <X className="h-5 w-5" />
       </button>
 
-      {/* 9:16 canvas container */}
+      {/* 依輸出比例的 canvas container（預設 9:16） */}
       <div
         className={`${isLeaving ? 'immersive-canvas-leave' : 'immersive-canvas-enter'} relative rounded-2xl overflow-hidden border border-white/10`}
         style={{
-          aspectRatio: '9 / 16',
+          aspectRatio: canvasEditorProps.outputSize
+            ? `${canvasEditorProps.outputSize.width} / ${canvasEditorProps.outputSize.height}`
+            : '9 / 16',
           maxHeight: 'calc(100vh - 32px)',
           maxWidth: 'calc(100vw - 32px)',
         }}

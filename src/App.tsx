@@ -8,6 +8,7 @@ import { MasterworkPickerModal } from '@/components/panel/MasterworkPickerModal'
 import { AppToolbar } from '@/components/panel/AppToolbar'
 import { CanvasSection } from '@/components/canvas/CanvasSection'
 import { EditorSidebar } from '@/components/panel/EditorSidebar'
+import { CarouselPanel } from '@/components/panel/CarouselPanel'
 import { NarrationSidebar } from '@/components/panel/NarrationSidebar'
 import type { NarrationAICameraResult, NarrationAIStoryResult } from '@/components/panel/NarrationAIPanel'
 import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
@@ -17,7 +18,8 @@ import { useAutosave } from '@/hooks/useAutosave'
 import { useHistory } from '@/hooks/useHistory'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import { CAROUSEL_OUTPUT, useCarouselSlides } from '@/hooks/useCarouselSlides'
+import type { CameraPoint, CaptionData, DragState, EditorMode, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import { composeFrame, drawChrome, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
@@ -61,8 +63,11 @@ function AppInner() {
   const [isEditorSidebarCollapsed, setIsEditorSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
+  // 輪播模式：獨立的 4:5 投影片清單，與影片鏡頭互不干擾
+  const [editorMode, setEditorMode] = useState<EditorMode>('video')
+  const carousel = useCarouselSlides()
 
-  useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
+  useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex, carousel.activeIndex])
 
   // 疊加圖被刪除後，釋放其在模組快取中殘留的已解碼圖片（否則反覆新增/刪除會使記憶體無上限成長）
   useEffect(() => {
@@ -102,6 +107,7 @@ function AppInner() {
     overlaysLocked,
     mosaicStrokes,
     showMosaicInOutput,
+    carouselSlides: carousel.slides,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -109,6 +115,7 @@ function AppInner() {
     setOverlaysLocked,
     setMosaicStrokes,
     setShowMosaicInOutput,
+    setCarouselSlides: carousel.setSlides,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -119,6 +126,7 @@ function AppInner() {
     overlaysLocked,
     mosaicStrokes,
     showMosaicInOutput,
+    carouselSlides: carousel.slides,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -126,6 +134,7 @@ function AppInner() {
     setOverlaysLocked,
     setMosaicStrokes,
     setShowMosaicInOutput,
+    setCarouselSlides: carousel.setSlides,
     triggerRedraw,
   })
 
@@ -159,7 +168,8 @@ function AppInner() {
     subtitleCues,
     imageOverlays,
     mosaicStrokes,
-  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes])
+    carouselSlides: carousel.slides,
+  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes, carousel.slides])
 
   const restoreSnapshot = useCallback((snapshot: typeof historyDoc) => {
     store.setPoints(snapshot.points)
@@ -169,8 +179,10 @@ function AppInner() {
     setSubtitleCues(snapshot.subtitleCues)
     setImageOverlays(snapshot.imageOverlays)
     setMosaicStrokes(snapshot.mosaicStrokes)
+    carousel.setSlides(snapshot.carouselSlides)
+    carousel.setActiveIndex(index => Math.min(index, snapshot.carouselSlides.length - 1))
     triggerRedraw()
-  }, [store, handleNarrationTrackChange, triggerRedraw])
+  }, [store, handleNarrationTrackChange, triggerRedraw, carousel.setSlides, carousel.setActiveIndex])
 
   const { undo, redo, canUndo, canRedo } = useHistory(historyDoc, restoreSnapshot)
 
@@ -297,7 +309,7 @@ function AppInner() {
 
   // ---------- Preview ----------
   const previewPath = useCallback(async () => {
-    if (!store.image || !store.points.length || store.isRendering) return
+    if (!store.image || !store.points.length || store.isRendering || editorMode === 'carousel') return
     previewCancelRef.current = false
     store.setIsPreviewing(true)
     // Start from current cursor position (not always from 0)
@@ -329,7 +341,7 @@ function AppInner() {
     timelinePanelRef.current?.setTimeCursor(currentTimeRef.current)
     store.setIsPreviewing(false)
     triggerRedraw()
-  }, [store, totalDuration, drawTimelineTime, triggerRedraw, narrationTrack])
+  }, [store, totalDuration, drawTimelineTime, triggerRedraw, narrationTrack, editorMode])
 
   // ---------- Point management helpers ----------
   const handlePointAdd = useCallback((x: number, y: number) => {
@@ -538,10 +550,22 @@ function AppInner() {
     if (!store.image || store.isRendering) return
     previewCancelRef.current = true
     store.setIsPreviewing(false)
-    store.setActiveTab('camera')
+    if (editorMode === 'carousel') carousel.setTab('camera')
+    else store.setActiveTab('camera')
     setIsImmersiveMode(true)
     triggerRedraw()
-  }, [store, triggerRedraw])
+  }, [store, triggerRedraw, editorMode, carousel.setTab])
+
+  const switchEditorMode = useCallback((mode: EditorMode) => {
+    if (mode === editorMode) return
+    previewCancelRef.current = true
+    store.setIsPreviewing(false)
+    stopNarrationAudio(narrationSourcesRef)
+    setIsMosaicPaintMode(false)
+    setActiveCaptionIndex(0)
+    setEditorMode(mode)
+    triggerRedraw()
+  }, [editorMode, store, triggerRedraw])
 
   const closeImmersiveMode = useCallback(() => {
     setIsImmersiveLeaving(true)
@@ -653,6 +677,67 @@ function AppInner() {
     onMosaicStrokeChange: handleMosaicStrokeChange,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
+  // ---------- 輪播模式 ----------
+  // 同一個 Scene 換成投影片：沒有旁白、疊加圖與時間軸，只剩取景、字幕、背景與馬賽克
+  const carouselScene = useMemo<Scene>(() => ({
+    ...scene,
+    points: carousel.slides,
+    cues: [],
+    overlays: [],
+    showCameraCaptions: true,
+    audioEnd: 0,
+  }), [scene, carousel.slides])
+
+  const carouselEditorScene = useMemo<Scene>(() => ({
+    ...carouselScene,
+    mosaic: (showMosaicInOutput || isMosaicPaintMode) ? mosaicStrokes : [],
+  }), [carouselScene, showMosaicInOutput, isMosaicPaintMode, mosaicStrokes])
+
+  const carouselEditorProps = {
+    scene: carouselEditorScene,
+    outputSize: CAROUSEL_OUTPUT,
+    outputLabel: '4:5',
+    image: store.image,
+    points: carousel.slides,
+    activeIndex: carousel.activeIndex,
+    activeTab: carousel.tab,
+    backgroundSettings: store.backgroundSettings,
+    safeAreaVisibility: { ig: false, shorts: false, tiktok: false },
+    showAllPoints: store.showAllPoints,
+    onlyActiveBox: store.onlyActiveBox,
+    showCaptionBox: store.showCaptionBox,
+    showGuidesInPreview: store.showGuidesInPreview,
+    showCameraCaptionsInOutput: true,
+    isRendering: store.isRendering,
+    isPreviewing: false,
+    onPointAdd: (x: number, y: number) => { carousel.add(x, y, store.lastCaptionStyle); triggerRedraw() },
+    onPointMove: (i: number, x: number, y: number) => { carousel.onPointMove(i, x, y); triggerRedraw() },
+    onPointResize: (i: number, zoom: number) => { carousel.onPointResize(i, zoom); triggerRedraw() },
+    onPointSelect: (i: number) => { carousel.setActiveIndex(i); triggerRedraw() },
+    onCaptionMove: (i: number, ci: number, x: number, y: number) => { carousel.onCaptionMove(i, ci, x, y); triggerRedraw() },
+    onCaptionFontResize: (i: number, ci: number, scale: number) => { carousel.onCaptionFontResize(i, ci, scale); triggerRedraw() },
+    onCaptionBoxWidth: (i: number, ci: number, v: number) => { carousel.onCaptionBoxWidth(i, ci, v); triggerRedraw() },
+    onCaptionBoxHeight: (i: number, ci: number, v: number) => { carousel.onCaptionBoxHeight(i, ci, v); triggerRedraw() },
+    onDragEnd: triggerRedraw,
+    onPointDelete: (i: number) => { carousel.remove(i); triggerRedraw() },
+    onEnterCaption: () => { carousel.setTab('caption'); triggerRedraw() },
+    onBackToCamera: () => { carousel.setTab('camera'); triggerRedraw() },
+    activeCaptionIndex,
+    onCaptionSelect: setActiveCaptionIndex,
+    snapGuide,
+    setSnapGuide,
+    dragStateRef,
+    currentTimeRef,
+    forceRedraw,
+    mosaicStrokes,
+    showMosaic: showMosaicInOutput || isMosaicPaintMode,
+    isMosaicPaintMode,
+    onMosaicStrokeChange: handleMosaicStrokeChange,
+  } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
+
+  const isCarousel = editorMode === 'carousel'
+  const activeEditorProps = isCarousel ? carouselEditorProps : canvasEditorProps
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
       <AppToolbar
@@ -661,11 +746,13 @@ function AppInner() {
         isRendering={store.isRendering}
         renderProgress={renderProgress}
         hasImage={!!store.image}
-        hasPoints={!!store.points.length}
-        scene={scene}
+        hasPoints={!isCarousel && !!store.points.length}
+        scene={isCarousel ? carouselScene : scene}
         projectName={store.projectName}
-        activeTab={store.activeTab}
-        onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
+        activeTab={isCarousel ? carousel.tab : store.activeTab}
+        onTabChange={tab => { if (isCarousel) carousel.setTab(tab); else store.setActiveTab(tab); triggerRedraw() }}
+        editorMode={editorMode}
+        onEditorModeChange={switchEditorMode}
         fileInputRef={fileInputRef as React.RefObject<HTMLInputElement>}
         loadProjectInputRef={loadProjectInputRef as React.RefObject<HTMLInputElement>}
         onProjectNameChange={name => store.setProjectName(normalizeProjectName(name))}
@@ -686,7 +773,7 @@ function AppInner() {
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto lg:overflow-hidden p-2 gap-2">
         <div className="flex flex-col lg:flex-row flex-1 lg:min-h-0 gap-2">
-          <NarrationSidebar
+          {!isCarousel && <NarrationSidebar
             track={narrationTrack}
             onTrackChange={handleNarrationTrackChange}
             subtitleCues={subtitleCues}
@@ -701,11 +788,11 @@ function AppInner() {
             onApplyStyleToCameraCaption={handleApplySubtitleStyleToCameraCaption}
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
-          />
+          />}
           <CanvasSection
             isDisabled={isDisabled}
             hasImage={!!store.image}
-            activeTab={store.activeTab}
+            activeTab={isCarousel ? carousel.tab : store.activeTab}
             onOpenImmersiveMode={openImmersiveMode}
             showAllPoints={store.showAllPoints}
             onlyActiveBox={store.onlyActiveBox}
@@ -731,9 +818,23 @@ function AppInner() {
             onMosaicPaintModeChange={setIsMosaicPaintMode}
             safeAreaVisibility={store.safeAreaVisibility}
             onSafeAreaChange={(key, val) => { store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val }); triggerRedraw() }}
-            canvasEditorProps={canvasEditorProps}
+            showPlatformPreview={!isCarousel}
+            canvasEditorProps={activeEditorProps}
           />
 
+          {isCarousel ? (
+            <CarouselPanel
+              carousel={carousel}
+              scene={carouselScene}
+              videoPoints={store.points}
+              activeCaptionIndex={activeCaptionIndex}
+              onSetActiveCaptionIndex={setActiveCaptionIndex}
+              lastCaptionStyle={store.lastCaptionStyle}
+              collapsed={isEditorSidebarCollapsed}
+              onToggleCollapse={() => setIsEditorSidebarCollapsed(v => !v)}
+              onChanged={triggerRedraw}
+            />
+          ) : (
           <EditorSidebar
             points={store.points}
             activeIndex={store.activeIndex}
@@ -791,9 +892,10 @@ function AppInner() {
               onBackgroundChange: s => { store.setBackgroundSettings(s); triggerRedraw() },
             }}
           />
+          )}
         </div>
 
-        <div className="flex-shrink-0 rounded-2xl border border-border bg-card p-3">
+        {!isCarousel && <div className="flex-shrink-0 rounded-2xl border border-border bg-card p-3">
           <TimelinePanel
             ref={timelinePanelRef}
             points={store.points}
@@ -832,7 +934,7 @@ function AppInner() {
             overlaysLocked={overlaysLocked}
             onToggleOverlaysLocked={() => setOverlaysLocked(v => !v)}
           />
-        </div>
+        </div>}
       </div>
 
       {isAiPanelOpen && (
@@ -853,7 +955,7 @@ function AppInner() {
         <ImmersiveOverlay
           isLeaving={isImmersiveLeaving}
           onClose={closeImmersiveMode}
-          canvasEditorProps={canvasEditorProps}
+          canvasEditorProps={activeEditorProps}
         />
       )}
 

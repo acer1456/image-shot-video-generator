@@ -33,6 +33,8 @@ interface CanvasSectionProps {
   onMosaicPaintModeChange: (value: boolean) => void
   safeAreaVisibility: SafeAreaVisibility
   onSafeAreaChange: (key: keyof SafeAreaVisibility, val: boolean) => void
+  /** 平台安全區預覽只對 9:16 影片有意義；輪播模式關掉 */
+  showPlatformPreview?: boolean
   canvasEditorProps: CanvasEditorProps
 }
 
@@ -43,6 +45,7 @@ export function CanvasSection({
   showNarrationInOutput, showCameraCaptionsInOutput, showMosaicInOutput,
   isMosaicPaintMode, onToggle, onMosaicPaintModeChange,
   safeAreaVisibility, onSafeAreaChange,
+  showPlatformPreview = true,
   canvasEditorProps,
 }: CanvasSectionProps) {
   const [canvasScale, setCanvasScale] = useState(1)
@@ -159,7 +162,7 @@ export function CanvasSection({
                 <Switch checked={showGuidesInPreview} onCheckedChange={v => onToggle('showGuidesInPreview', v)} />
               </label>
 
-              {activeTab === 'caption' && (
+              {activeTab === 'caption' && showPlatformPreview && (
                 <>
                   <div className="h-px bg-border/60" />
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">平台預覽</p>

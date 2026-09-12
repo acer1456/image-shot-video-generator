@@ -21,6 +21,7 @@ interface UseProjectIOOptions {
   overlaysLocked?: boolean
   mosaicStrokes?: MosaicStroke[]
   showMosaicInOutput?: boolean
+  carouselSlides?: CameraPoint[]
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
@@ -28,6 +29,7 @@ interface UseProjectIOOptions {
   setOverlaysLocked?: Dispatch<SetStateAction<boolean>>
   setMosaicStrokes?: Dispatch<SetStateAction<MosaicStroke[]>>
   setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
+  setCarouselSlides?: Dispatch<SetStateAction<CameraPoint[]>>
 }
 
 export function useProjectIO(store: AppStore, triggerRedraw: () => void, options?: UseProjectIOOptions) {
@@ -108,6 +110,7 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
         overlaysLocked: options?.overlaysLocked ?? false,
         mosaicStrokes: options?.mosaicStrokes ?? [],
         showMosaicInOutput: options?.showMosaicInOutput ?? true,
+        carouselSlides: options?.carouselSlides ?? [],
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -145,6 +148,7 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
       options?.setOverlaysLocked?.(project.overlaysLocked === true)
       options?.setMosaicStrokes?.(normalizeMosaicStrokes(project.mosaicStrokes))
       options?.setShowMosaicInOutput?.(project.showMosaicInOutput !== false)
+      options?.setCarouselSlides?.(Array.isArray(project.carouselSlides) ? project.carouselSlides.map(normalizePoint) : [])
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }

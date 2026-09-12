@@ -105,7 +105,11 @@ export interface ProjectData {
   subtitleCues?: SubtitleCue[]
   mosaicStrokes?: MosaicStroke[]
   showMosaicInOutput?: boolean
+  /** IG 輪播投影片：沿用 CameraPoint（x/y/zoom/caption），move 與時長欄位不使用。 */
+  carouselSlides?: CameraPoint[]
 }
+
+export type EditorMode = 'video' | 'carousel'
 
 export interface DragState {
   type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove' | 'overlayMove' | 'overlayResize'

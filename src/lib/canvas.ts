@@ -173,10 +173,11 @@ function getCameraForPoint(image: { width: number; height: number }, p: CameraPo
 export function getViewBoxCanvas(
   canvas: HTMLCanvasElement,
   image: HTMLImageElement,
-  p: CameraPoint
+  p: CameraPoint,
+  outputRatio: number = OUTPUT_RATIO,
 ) {
   const r = fitImageRect(canvas, image)
-  const src = getCameraSourceRect(image, p)
+  const src = getCameraSourceRect(image, p, outputRatio)
   const x = r.x + (src.sx / image.width) * r.w
   const y = r.y + (src.sy / image.height) * r.h
   const w = (src.sw / image.width) * r.w

@@ -46,9 +46,11 @@ interface CaptionEditorProps {
   onUpdateCaption: <K extends keyof CaptionData>(field: K, value: CaptionData[K]) => void
   onUpdateHold: (value: number) => void
   onCenter: () => void
+  /** 輪播投影片沒有時間軸，不顯示停留秒數 */
+  hideHold?: boolean
 }
 
-export default function CaptionEditor({ point, disabled, activeCaptionIndex, onSetActiveCaptionIndex, onAddCaption, onDeleteCaption, onUpdateCaption, onUpdateHold, onCenter }: CaptionEditorProps) {
+export default function CaptionEditor({ point, disabled, activeCaptionIndex, onSetActiveCaptionIndex, onAddCaption, onDeleteCaption, onUpdateCaption, onUpdateHold, onCenter, hideHold = false }: CaptionEditorProps) {
   const allCaps = point ? [point.caption, ...(point.extraCaptions || [])] : []
   const cap = activeCaptionIndex === 0
     ? point?.caption
@@ -334,18 +336,22 @@ export default function CaptionEditor({ point, disabled, activeCaptionIndex, onS
             </>
           )}
 
-          <Separator />
+          {!hideHold && (
+            <>
+              <Separator />
 
-          <div>
-            <Label className="mb-1 block">停留秒數</Label>
-            <Input
-              type="number"
-              min={0} max={20} step={0.1}
-              value={point?.holdDuration ?? 0}
-              onChange={e => onUpdateHold(clamp(Number(e.target.value), 0, 20))}
-              className="h-8 text-xs"
-            />
-          </div>
+              <div>
+                <Label className="mb-1 block">停留秒數</Label>
+                <Input
+                  type="number"
+                  min={0} max={20} step={0.1}
+                  value={point?.holdDuration ?? 0}
+                  onChange={e => onUpdateHold(clamp(Number(e.target.value), 0, 20))}
+                  className="h-8 text-xs"
+                />
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

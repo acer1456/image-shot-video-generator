@@ -15,6 +15,10 @@ import { useTheme } from 'next-themes'
 interface CanvasEditorProps {
   /** 編輯器要畫的內容。與匯出共用同一組 layer，只是多疊一層 chrome。 */
   scene: Scene
+  /** 輸出畫布尺寸；取景框比例、字幕排版都跟著它。預設 9:16 影片輸出。 */
+  outputSize?: { width: number; height: number }
+  /** 畫布左上角的取景框標籤，例如「9:16」。 */
+  outputLabel?: string
   image: HTMLImageElement | null
   points: CameraPoint[]
   activeIndex: number
@@ -69,6 +73,8 @@ interface CaptionDragPreview {
 
 export default function CanvasEditor({
   scene,
+  outputSize = { width: OUTPUT_W, height: OUTPUT_H },
+  outputLabel = '9:16',
   image, points, activeIndex, activeTab,
   backgroundSettings, safeAreaVisibility,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput,
@@ -92,6 +98,9 @@ export default function CanvasEditor({
   const overlayDragFrameRef = useRef<number | null>(null)
   const overlayDragPatchRef = useRef<{ id: string; patch: Partial<ImageOverlay> } | null>(null)
   const { resolvedTheme } = useTheme()
+  const outputW = outputSize.width
+  const outputH = outputSize.height
+  const outputRatio = outputW / outputH
 
   const getCssVar = useCallback((name: string, fallback: string) => {
     const el = document.documentElement
@@ -112,8 +121,8 @@ export default function CanvasEditor({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    if (canvas.width !== OUTPUT_W) canvas.width = OUTPUT_W
-    if (canvas.height !== OUTPUT_H) canvas.height = OUTPUT_H
+    if (canvas.width !== outputW) canvas.width = outputW
+    if (canvas.height !== outputH) canvas.height = outputH
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     const isDark = resolvedTheme === 'dark'
@@ -164,7 +173,7 @@ export default function CanvasEditor({
         })
       }
     }
-  }, [scene, image, points, activeIndex, activeTab, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
+  }, [scene, image, points, activeIndex, activeTab, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef, outputW, outputH])
 
   const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
     const canvas = canvasRef.current
@@ -274,7 +283,7 @@ export default function CanvasEditor({
 
   const drawViewBox = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, p: CameraPoint, active: boolean) => {
     if (!image) return
-    const box = getViewBoxCanvas(canvas, image, p)
+    const box = getViewBoxCanvas(canvas, image, p, outputRatio)
     if (active) {
       const r = fitImageRect(canvas, image)
       ctx.save()
@@ -394,28 +403,28 @@ export default function CanvasEditor({
   const isOnMoveHandle = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
-    const box = getViewBoxCanvas(canvas, image, points[activeIndex])
+    const box = getViewBoxCanvas(canvas, image, points[activeIndex], outputRatio)
     return distance(x, y, box.x, box.y + box.h) <= 36
   }
 
   const isOnActiveResizeHandle = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
-    const box = getViewBoxCanvas(canvas, image, points[activeIndex])
+    const box = getViewBoxCanvas(canvas, image, points[activeIndex], outputRatio)
     return distance(x, y, box.handleX, box.handleY) <= 36
   }
 
   const isOnDeleteHandle = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
-    const box = getViewBoxCanvas(canvas, image, points[activeIndex])
+    const box = getViewBoxCanvas(canvas, image, points[activeIndex], outputRatio)
     return distance(x, y, box.x, box.y) <= 36
   }
 
   const isOnCaptionHandle = (x: number, y: number) => {
     const canvas = canvasRef.current
     if (!canvas || !image || activeIndex < 0 || !points[activeIndex]) return false
-    const box = getViewBoxCanvas(canvas, image, points[activeIndex])
+    const box = getViewBoxCanvas(canvas, image, points[activeIndex], outputRatio)
     return distance(x, y, box.x + box.w, box.y) <= 36
   }
 
@@ -655,7 +664,7 @@ export default function CanvasEditor({
       const desiredW = Math.abs(pos.x - center.x) * 2 / r.w * image.width
       const desiredH = Math.abs(pos.y - center.y) * 2 / r.h * image.height
       // zoom=1 的取景範圍就是 base 尺寸；共用 getCameraSourceRect，不再自己算一次
-      const base = getCameraSourceRect(image, { ...p, zoom: 1 })
+      const base = getCameraSourceRect(image, { ...p, zoom: 1 }, outputRatio)
       const zoom = clamp(Math.min(base.sw / Math.max(1, desiredW), base.sh / Math.max(1, desiredH)), 1, 15)
       onPointResize(drag.index, zoom)
     }
@@ -758,11 +767,11 @@ export default function CanvasEditor({
       <canvas
         ref={canvasRef}
         style={{
-          /* Height-constrained: fills available height, width computed from 9:16 ratio */
+          /* Height-constrained: fills available height, width computed from the output ratio */
           height: '100%',
           width: 'auto',
           maxWidth: '100%',
-          aspectRatio: '9/16',
+          aspectRatio: `${outputW}/${outputH}`,
           display: 'block',
           cursor: isMosaicPaintMode ? 'cell' : 'crosshair',
           borderRadius: '12px',
@@ -779,7 +788,7 @@ export default function CanvasEditor({
         </button>
       ) : (
         <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/55 text-white text-xs pointer-events-none">
-          9:16 輸出取景框
+          {outputLabel} 輸出取景框
         </div>
       )}
     </div>
