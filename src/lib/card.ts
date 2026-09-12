@@ -6,12 +6,12 @@ export interface Rect { x: number; y: number; w: number; h: number }
 
 /** 每種框的預設色：金框是金色、相紙是米白、線框是白 */
 export const CARD_FRAMES: { value: CardFrame; label: string; color: string }[] = [
-  { value: 'versailles', label: '凡爾賽宮金框（莨苕葉浮雕）', color: '#c9a227' },
-  { value: 'baroque', label: '巴洛克金框（貝殼繩紋）', color: '#c49a2a' },
-  { value: 'rococo', label: '洛可可金框（緞帶月桂）', color: '#d4b04a' },
-  { value: 'neoclassic', label: '新古典金框（蘆葦蛋鏢）', color: '#c9a227' },
-  { value: 'empire', label: '帝政黑金框', color: '#c9a227' },
-  { value: 'museum', label: '簡約金框', color: '#c9a227' },
+  { value: 'versailles', label: '凡爾賽宮金框（莨苕葉浮雕）', color: '#b8933a' },
+  { value: 'baroque', label: '巴洛克金框（貝殼繩紋）', color: '#ad8a34' },
+  { value: 'rococo', label: '洛可可金框（緞帶月桂）', color: '#c4a04c' },
+  { value: 'neoclassic', label: '新古典金框（蘆葦蛋鏢）', color: '#b8933a' },
+  { value: 'empire', label: '帝政黑金框', color: '#b8933a' },
+  { value: 'museum', label: '簡約金框', color: '#b8933a' },
   { value: 'double', label: '雙線畫廊框', color: '#ffffff' },
   { value: 'thin', label: '細線框', color: '#ffffff' },
   { value: 'polaroid', label: '相紙白框', color: '#f4f1ea' },
@@ -20,7 +20,7 @@ export const CARD_FRAMES: { value: CardFrame; label: string; color: string }[] =
 
 export const DEFAULT_CARD: Omit<CarouselCard, 'kind'> = {
   frame: 'versailles',
-  frameColor: '#c9a227',
+  frameColor: '#b8933a',
   imageWidth: 0.72,
   imageY: 0.42,
 }

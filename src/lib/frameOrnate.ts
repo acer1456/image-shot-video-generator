@@ -47,15 +47,43 @@ function rgbToHex(c: [number, number, number]) {
   return `#${c.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('')}`
 }
 
-const HIGHLIGHT: [number, number, number] = [255, 248, 222]   // 暖白高光
-const SHADOW: [number, number, number] = [38, 24, 4]          // 深褐陰影
+type RGB = [number, number, number]
+const BOLE: RGB = [118, 66, 18]        // 金箔底下透出的紅褐色（bole）
+const DEEP: RGB = [26, 15, 5]          // 最深的縫隙
+const WARM: RGB = [238, 214, 150]      // 中亮：偏暖的淡金
+const GLINT: RGB = [255, 250, 232]     // 最亮的反光點
 
-/** t>0 往暖白提亮，t<0 往深褐壓暗 */
+function mixRgb(a: RGB, b: RGB, k: number): RGB {
+  return [mix(a[0], b[0], k), mix(a[1], b[1], k), mix(a[2], b[2], k)]
+}
+
+const shadeCache = new Map<string, string>()
+
+/**
+ * 金屬色階：t>0 先往暖淡金再往反光白，t<0 先往紅褐再往深縫隙色。
+ * 兩段式而不是直線混黑白，鍍金的陰影才會偏紅褐、高光才會又窄又亮。
+ */
 export function shade(hex: string, t: number) {
+  const key = `${hex}|${t.toFixed(3)}`
+  const hit = shadeCache.get(key)
+  if (hit) return hit
   const c = hexToRgb(hex)
-  const target = t >= 0 ? HIGHLIGHT : SHADOW
   const k = Math.min(1, Math.abs(t))
-  return rgbToHex([mix(c[0], target[0], k), mix(c[1], target[1], k), mix(c[2], target[2], k)])
+  let out: RGB
+  if (t >= 0) {
+    out = k < 0.6 ? mixRgb(c, WARM, k / 0.6) : mixRgb(WARM, GLINT, (k - 0.6) / 0.4)
+  } else {
+    out = k < 0.55 ? mixRgb(c, BOLE, k / 0.55) : mixRgb(BOLE, DEEP, (k - 0.55) / 0.45)
+  }
+  const v = rgbToHex(out)
+  if (shadeCache.size > 4000) shadeCache.clear()
+  shadeCache.set(key, v)
+  return v
+}
+
+function rgba(hex: string, alpha: number) {
+  const [r, g, b] = hexToRgb(hex)
+  return `rgba(${r},${g},${b},${alpha})`
 }
 
 // ─── 幾何工具 ────────────────────────────────────────────────────────────
@@ -63,7 +91,7 @@ export function shade(hex: string, t: number) {
 type Side = 0 | 1 | 2 | 3   // top, right, bottom, left
 
 /** 各邊的受光：上最亮、左次之、右偏暗、下最暗 */
-const SIDE_LIGHT: Record<Side, number> = { 0: 0.22, 1: -0.1, 2: -0.28, 3: 0.06 }
+const SIDE_LIGHT: Record<Side, number> = { 0: 0.26, 1: -0.14, 2: -0.36, 3: 0.04 }
 
 interface Local {
   ctx: CanvasRenderingContext2D
@@ -84,13 +112,18 @@ function localOffset(angle: number) {
 function relief(L: Local, build: () => void, fill: string | CanvasGradient, dark: string, light: string, depth = 1) {
   const { ctx, unit } = L
   const d = depth * 1.3 * unit
+  // 陰影分兩層、半透明，邊緣才不會像貼紙；亮邊窄而淡，像稜線上的反光
+  const [sx2, sy2] = L.offset(d * 2.2, d * 2.2)
   const [sx, sy] = L.offset(d, d)
-  const [lx, ly] = L.offset(-d * 0.8, -d * 0.8)
+  const [lx, ly] = L.offset(-d * 0.6, -d * 0.6)
   ctx.save()
-  ctx.translate(sx, sy); ctx.fillStyle = dark; build(); ctx.fill()
+  ctx.translate(sx2, sy2); ctx.fillStyle = rgba(dark, 0.35); build(); ctx.fill()
   ctx.restore()
   ctx.save()
-  ctx.translate(lx, ly); ctx.fillStyle = light; build(); ctx.fill()
+  ctx.translate(sx, sy); ctx.fillStyle = rgba(dark, 0.7); build(); ctx.fill()
+  ctx.restore()
+  ctx.save()
+  ctx.translate(lx, ly); ctx.fillStyle = rgba(light, 0.8); build(); ctx.fill()
   ctx.restore()
   ctx.fillStyle = fill; build(); ctx.fill()
 }
@@ -98,12 +131,12 @@ function relief(L: Local, build: () => void, fill: string | CanvasGradient, dark
 /** 剖面光影：回傳沿 band 深度 (0=外緣, 1=內緣) 的明暗曲線取樣點 */
 function profileStops(motif: Motif): [number, number][] {
   switch (motif) {
-    case 'cove': return [[0, -0.32], [0.5, -0.05], [1, 0.34]]
-    case 'torus': return [[0, -0.4], [0.3, 0.42], [0.55, 0.05], [1, -0.45]]
-    case 'ogee': return [[0, -0.2], [0.25, 0.38], [0.55, -0.05], [0.8, -0.35], [1, 0.1]]
+    case 'cove': return [[0, -0.55], [0.15, -0.3], [0.6, 0.0], [0.9, 0.35], [1, 0.15]]
+    case 'torus': return [[0, -0.6], [0.18, 0.1], [0.3, 0.75], [0.4, 0.3], [0.7, -0.15], [1, -0.7]]
+    case 'ogee': return [[0, -0.45], [0.2, 0.55], [0.32, 0.15], [0.55, -0.1], [0.78, -0.5], [0.92, 0.1], [1, -0.2]]
     case 'reed': case 'rope': case 'ribbon': case 'laurel': case 'leaf': case 'eggdart': case 'bead':
-      return [[0, -0.25], [0.5, 0.05], [1, -0.3]]
-    default: return [[0, 0.08], [1, -0.08]]
+      return [[0, -0.45], [0.5, -0.12], [1, -0.5]]
+    default: return [[0, 0.12], [0.5, 0.0], [1, -0.18]]
   }
 }
 
@@ -114,10 +147,18 @@ function paintMotif(L: Local, motif: Motif, len: number, w: number, base: string
   const { ctx } = L
   const lit = (t: number) => shade(base, t + sideLight)
   const dark = lit(-0.75), light = lit(0.7)
+  // 手工雕刻不會等距到完美：每個花樣的位置與大小加一點固定的抖動
   const pattern = (step: number, draw: (x: number) => void) => {
     const n = Math.max(1, Math.floor((len - w * 2) / step))
     const start = (len - n * step) / 2 + step / 2
-    for (let i = 0; i < n; i++) draw(start + i * step)
+    for (let i = 0; i < n; i++) {
+      const j = (((i * 7919 + 13) % 17) / 17 - 0.5)
+      const x = start + i * step + j * step * 0.06
+      ctx.save()
+      ctx.translate(x, w / 2); ctx.scale(1 + j * 0.05, 1 + j * 0.04); ctx.translate(-x, -w / 2)
+      draw(x)
+      ctx.restore()
+    }
   }
 
   switch (motif) {
@@ -292,9 +333,12 @@ function strokeRelief(L: Local, build: () => void, width: number, color: string,
   const [sx, sy] = L.offset(d, d)
   const [lx, ly] = L.offset(-d * 0.8, -d * 0.8)
   ctx.lineCap = 'round'; ctx.lineJoin = 'round'
-  ctx.save(); ctx.translate(sx, sy); ctx.strokeStyle = dark; ctx.lineWidth = width; build(); ctx.stroke(); ctx.restore()
-  ctx.save(); ctx.translate(lx, ly); ctx.strokeStyle = light; ctx.lineWidth = width; build(); ctx.stroke(); ctx.restore()
+  ctx.save(); ctx.translate(sx * 2, sy * 2); ctx.strokeStyle = rgba(dark, 0.35); ctx.lineWidth = width * 1.15; build(); ctx.stroke(); ctx.restore()
+  ctx.save(); ctx.translate(sx, sy); ctx.strokeStyle = rgba(dark, 0.7); ctx.lineWidth = width; build(); ctx.stroke(); ctx.restore()
+  ctx.save(); ctx.translate(lx, ly); ctx.strokeStyle = rgba(light, 0.8); ctx.lineWidth = width * 0.8; build(); ctx.stroke(); ctx.restore()
   ctx.strokeStyle = color; ctx.lineWidth = width; build(); ctx.stroke()
+  // 渦卷本體再加一道細亮線在中央，做出圓桿的高光
+  ctx.strokeStyle = rgba(light, 0.55); ctx.lineWidth = width * 0.3; build(); ctx.stroke()
 }
 
 /** 單片葉：從原點往 +x 伸出的尖葉，帶中肋 */
@@ -484,39 +528,162 @@ export function paintOrnateFrame(ctx: CanvasRenderingContext2D, spec: FrameSpec,
   const fw = specWidth(spec) * unit
   const outer: Rect = { x: rect.x - fw, y: rect.y - fw, w: rect.w + fw * 2, h: rect.h + fw * 2 }
 
-  // 整個框投在背景上的陰影
-  ctx.save()
-  ctx.shadowColor = 'rgba(0,0,0,0.55)'
-  ctx.shadowBlur = 46 * unit
-  ctx.shadowOffsetY = 16 * unit
-  ctx.fillStyle = shade(base, -0.6)
-  ctx.fillRect(outer.x, outer.y, outer.w, outer.h)
-  ctx.restore()
+  // 框先畫在透明的離屏畫布上：紋理才能只疊在框的像素上（含凸出的角飾），
+  // 影子也能沿著真正的輪廓投下去
+  const off = offscreenFor(ctx.canvas.width, ctx.canvas.height)
+  const o = off.getContext('2d')!
+  o.clearRect(0, 0, off.width, off.height)
 
   let cur = outer
+  const boundaries: Rect[] = []
   for (const band of spec.bands) {
-    paintBand(ctx, cur, band, base, unit)
+    paintBand(o, cur, band, base, unit)
     const w = band.w * unit
     cur = { x: cur.x + w, y: cur.y + w, w: cur.w - w * 2, h: cur.h - w * 2 }
+    boundaries.push(cur)
   }
 
-  // 金屬光澤：整個框環帶一道斜向的亮→暗掃光，讓鍍金有反光感
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(outer.x, outer.y, outer.w, outer.h)
-  ctx.rect(rect.x, rect.y, rect.w, rect.h)
-  ctx.clip('evenodd')
-  const sheen = ctx.createLinearGradient(outer.x, outer.y, outer.x + outer.w, outer.y + outer.h)
-  sheen.addColorStop(0, 'rgba(255,250,230,0.22)')
-  sheen.addColorStop(0.35, 'rgba(255,250,230,0)')
-  sheen.addColorStop(0.6, 'rgba(0,0,0,0)')
-  sheen.addColorStop(1, 'rgba(40,20,0,0.28)')
-  ctx.fillStyle = sheen
-  ctx.fillRect(outer.x, outer.y, outer.w, outer.h)
-  ctx.restore()
+  // 線腳交界的環境遮蔽：每道縫隙往內側投一道柔和的深褐陰影，外側一條細亮稜線
+  for (const b of boundaries) {
+    o.save()
+    o.beginPath(); o.rect(b.x, b.y, b.w, b.h); o.clip()
+    for (const [wd, a] of [[4, 0.10], [2.4, 0.16], [1.2, 0.26]] as [number, number][]) {
+      o.strokeStyle = `rgba(30,16,4,${a})`; o.lineWidth = wd * unit
+      o.strokeRect(b.x, b.y, b.w, b.h)
+    }
+    o.restore()
+    o.save()
+    o.beginPath(); o.rect(outer.x, outer.y, outer.w, outer.h); o.rect(b.x, b.y, b.w, b.h); o.clip('evenodd')
+    o.strokeStyle = 'rgba(255,246,220,0.28)'; o.lineWidth = 1.2 * unit
+    o.strokeRect(b.x, b.y, b.w, b.h)
+    o.restore()
+  }
 
-  paintCenter(ctx, outer, spec.center, fw, base, unit)
-  paintCorner(ctx, outer, spec.corner, fw, base, unit, spec.cornerScale ?? 1)
+  paintCenter(o, outer, spec.center, fw, base, unit)
+  paintCorner(o, outer, spec.corner, fw, base, unit, spec.cornerScale ?? 1)
+
+  // 後製：multiply／overlay 會把透明區也塗上顏色，所以先把框的 alpha 存成遮罩，
+  // 疊完紋理再用 destination-in 裁回框的輪廓
+  const ext = fw
+  const region: Rect = { x: outer.x - ext, y: outer.y - ext, w: outer.w + ext * 2, h: outer.h + ext * 2 }
+  const mask = offscreenFor(ctx.canvas.width, ctx.canvas.height, 'mask')
+  const m = mask.getContext('2d')!
+  m.clearRect(0, 0, mask.width, mask.height)
+  m.drawImage(off, 0, 0)
+
+  o.save()
+  o.beginPath()
+  o.rect(region.x, region.y, region.w, region.h)
+  o.rect(rect.x, rect.y, rect.w, rect.h)
+  o.clip('evenodd')
+
+  // 色斑：大尺度的深淺不均（金箔磨損、積塵）
+  o.globalCompositeOperation = 'multiply'
+  o.globalAlpha = 0.5
+  o.fillStyle = mottlePattern(o, unit)
+  o.fillRect(region.x, region.y, region.w, region.h)
+
+  // 金箔顆粒：細噪點
+  o.globalCompositeOperation = 'overlay'
+  o.globalAlpha = 0.3
+  o.fillStyle = grainPattern(o)
+  o.fillRect(region.x, region.y, region.w, region.h)
+
+  // 金屬光澤：斜向的亮→暗掃光
+  o.globalCompositeOperation = 'source-atop'
+  o.globalAlpha = 1
+  const sheen = o.createLinearGradient(outer.x, outer.y, outer.x + outer.w, outer.y + outer.h)
+  sheen.addColorStop(0, 'rgba(255,250,230,0.18)')
+  sheen.addColorStop(0.3, 'rgba(255,250,230,0)')
+  sheen.addColorStop(0.65, 'rgba(0,0,0,0)')
+  sheen.addColorStop(1, 'rgba(40,20,0,0.32)')
+  o.fillStyle = sheen
+  o.fillRect(region.x, region.y, region.w, region.h)
+  o.restore()
+
+  o.save()
+  o.globalCompositeOperation = 'destination-in'
+  o.drawImage(mask, 0, 0)
+  o.restore()
+
+  // 輪廓：框的外緣與內緣各一條深色細線，讓框從背景與畫作中分離出來
+  o.save()
+  o.globalCompositeOperation = 'source-atop'
+  o.strokeStyle = 'rgba(20,12,4,0.55)'; o.lineWidth = 1.4 * unit
+  o.strokeRect(outer.x, outer.y, outer.w, outer.h)
+  o.strokeStyle = 'rgba(20,12,4,0.7)'; o.lineWidth = 1.6 * unit
+  o.strokeRect(rect.x, rect.y, rect.w, rect.h)
+  o.restore()
+
+  // 貼回主畫布，影子沿著框的真實輪廓投下（角飾也有）
+  ctx.save()
+  ctx.shadowColor = 'rgba(0,0,0,0.55)'
+  ctx.shadowBlur = 40 * unit
+  ctx.shadowOffsetY = 14 * unit
+  ctx.drawImage(off, 0, 0)
+  ctx.restore()
+}
+
+// 離屏畫布依尺寸快取：編輯畫布與匯出／縮圖各留一份，超過 4 份清掉最舊的
+const offscreens = new Map<string, HTMLCanvasElement>()
+function offscreenFor(w: number, h: number, role = 'frame') {
+  const key = `${role}:${w}x${h}`
+  let c = offscreens.get(key)
+  if (!c) {
+    c = document.createElement('canvas')
+    c.width = w; c.height = h
+    if (offscreens.size >= 8) offscreens.delete(offscreens.keys().next().value!)
+    offscreens.set(key, c)
+  }
+  return c
+}
+
+// ─── 紋理 ────────────────────────────────────────────────────────────────
+
+let grainCanvas: HTMLCanvasElement | null = null
+/** 細噪點：128×128 灰階雜訊，只生成一次 */
+function grainPattern(ctx: CanvasRenderingContext2D) {
+  if (!grainCanvas) {
+    grainCanvas = document.createElement('canvas')
+    grainCanvas.width = grainCanvas.height = 128
+    const g = grainCanvas.getContext('2d')!
+    const img = g.createImageData(128, 128)
+    let seed = 1234567
+    for (let i = 0; i < img.data.length; i += 4) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      const v = 96 + (seed % 64)
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v
+      img.data[i + 3] = 255
+    }
+    g.putImageData(img, 0, 0)
+  }
+  return ctx.createPattern(grainCanvas, 'repeat')!
+}
+
+let mottleCanvas: HTMLCanvasElement | null = null
+/** 色斑：幾十個柔和的暗斑與亮斑疊出來的雲狀紋，依 unit 縮放使斑塊大小跟框成比例 */
+function mottlePattern(ctx: CanvasRenderingContext2D, unit: number) {
+  if (!mottleCanvas) {
+    mottleCanvas = document.createElement('canvas')
+    mottleCanvas.width = mottleCanvas.height = 256
+    const g = mottleCanvas.getContext('2d')!
+    g.fillStyle = '#ffffff'
+    g.fillRect(0, 0, 256, 256)
+    let seed = 987654
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
+    for (let i = 0; i < 70; i++) {
+      const x = rnd() * 256, y = rnd() * 256, r = 14 + rnd() * 40
+      const dark = rnd() < 0.7
+      const grad = g.createRadialGradient(x, y, 0, x, y, r)
+      grad.addColorStop(0, dark ? `rgba(120,80,30,${0.18 + rnd() * 0.2})` : `rgba(255,255,255,${0.15 + rnd() * 0.2})`)
+      grad.addColorStop(1, 'rgba(255,255,255,0)')
+      g.fillStyle = grad
+      g.fillRect(x - r, y - r, r * 2, r * 2)
+    }
+  }
+  const p = ctx.createPattern(mottleCanvas, 'repeat')!
+  p.setTransform(new DOMMatrix().scale(Math.max(0.5, unit * 1.6)))
+  return p
 }
 
 /** 各種美術館框的規格（寬度以 1080 為單位） */
