@@ -1,4 +1,5 @@
-import type { CameraPoint, CaptionData, BackgroundSettings, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
+import type { CameraPoint, CaptionData, BackgroundSettings, CarouselCard, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
+import { cardImageRect, paintCardFrame } from './card'
 import { convertPointsCaptions, convertSubtitleCues, type ChineseConversion } from './chinese'
 import { getOverlayImage, getOverlayRatio, isOverlayActiveAt, paintOverlayGuides } from './overlays'
 import { getMosaickedImage } from './mosaic'
@@ -43,6 +44,8 @@ export interface FrameState {
   overlays: ImageOverlay[]
   mosaic: MosaicStroke[]
   subtitle: { text: string; style?: SubtitleStyle } | null
+  /** 輪播封面／封底：整張畫作加框，忽略 camera */
+  card?: CarouselCard
 }
 
 /**
@@ -65,6 +68,7 @@ export interface Chrome {
 export type Layer =
   | { kind: 'background'; color: string; blur: { image: SourceImage; blurPx: number } | null }
   | { kind: 'image'; image: SourceImage; src: Rect; dest: Rect; mosaic: MosaicStroke[] }
+  | { kind: 'frame'; card: CarouselCard; rect: Rect; phase: 'under' | 'over' }
   | { kind: 'overlay'; overlay: ImageOverlay; rect: Rect; opacity: number }
   | { kind: 'caption'; captionIndex: number; cap: CaptionData; layout: CaptionLayout }
   | { kind: 'subtitle'; style: SubtitleStyle | undefined; layout: SubtitleLayout }
@@ -303,6 +307,17 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
     blur: state.background.mode === 'blur' ? { image, blurPx: state.background.blur || 0 } : null,
   })
 
+  if (state.card) {
+    // 卡片：整張畫作等比置於畫布上，畫框畫在它底下（紙、斜面）與上面（內陰影）
+    const rect = cardImageRect(state.card, image, target)
+    layers.push({ kind: 'frame', card: state.card, rect, phase: 'under' })
+    layers.push({ kind: 'image', image, src: { x: 0, y: 0, w: image.width, h: image.height }, dest: rect, mosaic })
+    layers.push({ kind: 'frame', card: state.card, rect, phase: 'over' })
+    for (const overlay of state.overlays) layers.push(overlayLayer(overlay, target))
+    state.captions.forEach((cap, i) => layers.push({ kind: 'caption', captionIndex: i, cap, layout: captionLayout(target, cap) }))
+    return layers
+  }
+
   const p = { x: camera.cx / image.width, y: camera.cy / image.height, zoom: camera.zoom }
   const src = getCameraSourceRect(image, p as CameraPoint, target.width / target.height)
   const ix = Math.max(0, src.sx)
@@ -370,6 +385,9 @@ function paint(layers: Layer[], ctx: CanvasRenderingContext2D, onOverlayLoad?: (
           layer.dest.x, layer.dest.y, layer.dest.w, layer.dest.h)
         break
       }
+      case 'frame':
+        paintCardFrame(ctx, layer.card, layer.rect, layer.phase)
+        break
       case 'overlay': {
         const img = getOverlayImage(layer.overlay, onOverlayLoad)
         if (img) {
@@ -466,6 +484,7 @@ export function frameStateAt(scene: Scene, t: number): FrameState | null {
     overlays: scene.overlays.filter(o => isOverlayActiveAt(o, t)),
     mosaic: scene.mosaic,
     subtitle: text ? { text, style: cue?.style } : null,
+    card: timeline.captionPoint.card,
   }
 }
 

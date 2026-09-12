@@ -108,6 +108,7 @@ function AppInner() {
     mosaicStrokes,
     showMosaicInOutput,
     carouselSlides: carousel.slides,
+    carouselBackground: carousel.background,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -116,6 +117,7 @@ function AppInner() {
     setMosaicStrokes,
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
+    setCarouselBackground: carousel.setBackground,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -127,6 +129,7 @@ function AppInner() {
     mosaicStrokes,
     showMosaicInOutput,
     carouselSlides: carousel.slides,
+    carouselBackground: carousel.background,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -135,6 +138,7 @@ function AppInner() {
     setMosaicStrokes,
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
+    setCarouselBackground: carousel.setBackground,
     triggerRedraw,
   })
 
@@ -169,7 +173,8 @@ function AppInner() {
     imageOverlays,
     mosaicStrokes,
     carouselSlides: carousel.slides,
-  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes, carousel.slides])
+    carouselBackground: carousel.background,
+  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes, carousel.slides, carousel.background])
 
   const restoreSnapshot = useCallback((snapshot: typeof historyDoc) => {
     store.setPoints(snapshot.points)
@@ -181,8 +186,9 @@ function AppInner() {
     setMosaicStrokes(snapshot.mosaicStrokes)
     carousel.setSlides(snapshot.carouselSlides)
     carousel.setActiveIndex(index => Math.min(index, snapshot.carouselSlides.length - 1))
+    carousel.setBackground(snapshot.carouselBackground)
     triggerRedraw()
-  }, [store, handleNarrationTrackChange, triggerRedraw, carousel.setSlides, carousel.setActiveIndex])
+  }, [store, handleNarrationTrackChange, triggerRedraw, carousel.setSlides, carousel.setActiveIndex, carousel.setBackground])
 
   const { undo, redo, canUndo, canRedo } = useHistory(historyDoc, restoreSnapshot)
 
@@ -681,12 +687,16 @@ function AppInner() {
   // 同一個 Scene 換成投影片：沒有旁白、疊加圖與時間軸，只剩取景、字幕、背景與馬賽克
   const carouselScene = useMemo<Scene>(() => ({
     ...scene,
+    background: carousel.background,
     points: carousel.slides,
     cues: [],
     overlays: [],
     showCameraCaptions: true,
     audioEnd: 0,
-  }), [scene, carousel.slides])
+  }), [scene, carousel.slides, carousel.background])
+
+  // 封面／封底沒有取景，選到它們時畫布一律顯示成品預覽（字幕投影），文字可直接拖曳
+  const isCardActive = !!carousel.slides[carousel.activeIndex]?.card
 
   const carouselEditorScene = useMemo<Scene>(() => ({
     ...carouselScene,
@@ -700,8 +710,8 @@ function AppInner() {
     image: store.image,
     points: carousel.slides,
     activeIndex: carousel.activeIndex,
-    activeTab: carousel.tab,
-    backgroundSettings: store.backgroundSettings,
+    activeTab: isCardActive ? 'caption' : carousel.tab,
+    backgroundSettings: carousel.background,
     safeAreaVisibility: { ig: false, shorts: false, tiktok: false },
     showAllPoints: store.showAllPoints,
     onlyActiveBox: store.onlyActiveBox,
@@ -792,7 +802,7 @@ function AppInner() {
           <CanvasSection
             isDisabled={isDisabled}
             hasImage={!!store.image}
-            activeTab={isCarousel ? carousel.tab : store.activeTab}
+            activeTab={isCarousel ? (isCardActive ? 'caption' : carousel.tab) : store.activeTab}
             onOpenImmersiveMode={openImmersiveMode}
             showAllPoints={store.showAllPoints}
             onlyActiveBox={store.onlyActiveBox}
