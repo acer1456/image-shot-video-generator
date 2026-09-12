@@ -1,11 +1,17 @@
 import type { CameraPoint, CaptionData, CardFrame, CarouselCard } from '@/types'
-import { OUTPUT_W, clamp, hexToRgba, mix } from './utils'
+import { OUTPUT_W, clamp } from './utils'
+import { ORNATE_SPECS, paintOrnateFrame, specWidth } from './frameOrnate'
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
 /** 每種框的預設色：金框是金色、相紙是米白、線框是白 */
 export const CARD_FRAMES: { value: CardFrame; label: string; color: string }[] = [
-  { value: 'museum', label: '美術館金框', color: '#c9a227' },
+  { value: 'versailles', label: '凡爾賽宮金框（莨苕葉浮雕）', color: '#c9a227' },
+  { value: 'baroque', label: '巴洛克金框（貝殼繩紋）', color: '#c49a2a' },
+  { value: 'rococo', label: '洛可可金框（緞帶月桂）', color: '#d4b04a' },
+  { value: 'neoclassic', label: '新古典金框（蘆葦蛋鏢）', color: '#c9a227' },
+  { value: 'empire', label: '帝政黑金框', color: '#c9a227' },
+  { value: 'museum', label: '簡約金框', color: '#c9a227' },
   { value: 'double', label: '雙線畫廊框', color: '#ffffff' },
   { value: 'thin', label: '細線框', color: '#ffffff' },
   { value: 'polaroid', label: '相紙白框', color: '#f4f1ea' },
@@ -13,7 +19,7 @@ export const CARD_FRAMES: { value: CardFrame; label: string; color: string }[] =
 ]
 
 export const DEFAULT_CARD: Omit<CarouselCard, 'kind'> = {
-  frame: 'museum',
+  frame: 'versailles',
   frameColor: '#c9a227',
   imageWidth: 0.72,
   imageY: 0.42,
@@ -69,10 +75,13 @@ export function isCardPoint(p: CameraPoint | undefined | null): boolean {
 
 /** 畫框佔的寬度（以 1080 寬為基準，隨畫布縮放） */
 function frameInset(frame: CardFrame, unit: number): { side: number; bottom: number } {
+  if (frame in ORNATE_SPECS) {
+    const w = specWidth(ORNATE_SPECS[frame]) * unit
+    return { side: w, bottom: w }
+  }
   switch (frame) {
     case 'thin': return { side: 22 * unit, bottom: 22 * unit }
     case 'double': return { side: 34 * unit, bottom: 34 * unit }
-    case 'museum': return { side: 64 * unit, bottom: 64 * unit }
     case 'polaroid': return { side: 36 * unit, bottom: 110 * unit }
     default: return { side: 0, bottom: 0 }
   }
@@ -102,12 +111,6 @@ function strokeBand(ctx: CanvasRenderingContext2D, r: Rect, pad: number, width: 
   ctx.strokeRect(r.x - pad - width / 2, r.y - pad - width / 2, r.w + (pad + width / 2) * 2, r.h + (pad + width / 2) * 2)
 }
 
-function lighten(hex: string, t: number) {
-  const n = parseInt(hex.replace('#', '').padEnd(6, '0').slice(0, 6), 16)
-  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => Math.round(t >= 0 ? mix(v, 255, t) : mix(v, 0, -t)))
-  return `#${c.map(v => v.toString(16).padStart(2, '0')).join('')}`
-}
-
 /**
  * 畫框全部用 canvas 畫，不用素材。分兩趟：under 在畫作之前（紙、斜面、陰影），
  * over 在畫作之後（壓在畫作邊緣的內陰影）。
@@ -119,7 +122,7 @@ export function paintCardFrame(ctx: CanvasRenderingContext2D, card: CarouselCard
   ctx.lineJoin = 'miter'
 
   if (phase === 'over') {
-    if (card.frame === 'museum' || card.frame === 'double') {
+    if (card.frame in ORNATE_SPECS || card.frame === 'double') {
       // 畫作邊緣的內陰影，讓畫作像嵌進框裡
       const d = 16 * unit
       const edges: [number, number, number, number][] = [
@@ -162,58 +165,8 @@ export function paintCardFrame(ctx: CanvasRenderingContext2D, card: CarouselCard
       ctx.shadowColor = 'transparent'
       break
     }
-    case 'museum': {
-      // 由外而內：外緣暗邊 → 斜面主體（漸層，模擬鍍金弧面）→ 內唇亮線 → 內唇暗線 → 畫作內陰影
-      const outer = 64 * unit
-      const light = lighten(color, 0.45)
-      const dark = lighten(color, -0.45)
-      const deep = lighten(color, -0.7)
-
-      // 整個框投到背景上的陰影
-      ctx.shadowColor = 'rgba(0,0,0,0.55)'
-      ctx.shadowBlur = 48 * unit
-      ctx.shadowOffsetY = 18 * unit
-      ctx.fillStyle = deep
-      ctx.fillRect(rect.x - outer, rect.y - outer, rect.w + outer * 2, rect.h + outer * 2)
-      ctx.shadowColor = 'transparent'
-
-      // 斜面主體：對角漸層讓四邊有受光差
-      const g = ctx.createLinearGradient(rect.x - outer, rect.y - outer, rect.x + rect.w + outer, rect.y + rect.h + outer)
-      g.addColorStop(0, light)
-      g.addColorStop(0.35, color)
-      g.addColorStop(0.5, light)
-      g.addColorStop(0.65, color)
-      g.addColorStop(1, dark)
-      strokeBand(ctx, rect, 6 * unit, outer - 12 * unit, g)
-
-      // 外緣細亮線與內唇：亮 → 暗 兩道，做出立體台階
-      strokeBand(ctx, rect, outer - 5 * unit, 2 * unit, hexToRgba(light, 0.9))
-      strokeBand(ctx, rect, 4 * unit, 3 * unit, light)
-      strokeBand(ctx, rect, 1 * unit, 3 * unit, dark)
-
-      // 中段一道細凹槽，讓寬框不呆板
-      strokeBand(ctx, rect, outer * 0.55, 1.5 * unit, hexToRgba(dark, 0.7))
-      strokeBand(ctx, rect, outer * 0.55 + 2 * unit, 1 * unit, hexToRgba(light, 0.7))
-
-      // 四角裝飾：小菱形，金框常見的角飾
-      const cornerR = outer * 0.5
-      const corners = [
-        [rect.x - cornerR, rect.y - cornerR], [rect.x + rect.w + cornerR, rect.y - cornerR],
-        [rect.x - cornerR, rect.y + rect.h + cornerR], [rect.x + rect.w + cornerR, rect.y + rect.h + cornerR],
-      ]
-      for (const [cx, cy] of corners) {
-        const s = outer * 0.26
-        ctx.beginPath()
-        ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s, cy); ctx.lineTo(cx, cy + s); ctx.lineTo(cx - s, cy); ctx.closePath()
-        ctx.fillStyle = light
-        ctx.fill()
-        ctx.lineWidth = 1.5 * unit
-        ctx.strokeStyle = dark
-        ctx.stroke()
-      }
-      break
-    }
     default:
+      if (card.frame in ORNATE_SPECS) paintOrnateFrame(ctx, ORNATE_SPECS[card.frame], color, rect)
       break
   }
   ctx.restore()

@@ -25,7 +25,9 @@ export interface CaptionData {
   textShadowOpacity: number  // 0–1
 }
 
-export type CardFrame = 'none' | 'thin' | 'double' | 'museum' | 'polaroid'
+export type CardFrame =
+  | 'none' | 'thin' | 'double' | 'polaroid'
+  | 'museum' | 'versailles' | 'baroque' | 'rococo' | 'neoclassic' | 'empire'   // 浮雕金框，見 lib/frameOrnate.ts
 
 /**
  * 輪播的封面／封底卡片：整張畫作加框置於模糊背景上。
