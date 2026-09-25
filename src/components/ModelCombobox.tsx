@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, RefreshCw, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { fetchOpenRouterModels, type OpenRouterModelInfo } from '@/lib/openrouter'
+import { fetchOpenRouterModels, fetchAllTranslationModels, type OpenRouterModelInfo } from '@/lib/openrouter'
 
 function formatPrice(p: string): string {
   const n = parseFloat(p)
@@ -33,7 +33,9 @@ export function ModelCombobox({ apiKey, selectedId, selectedName, onSelect, requ
     setFetchStatus('loading')
     setFetchError('')
     try {
-      const list = await fetchOpenRouterModels(apiKey.trim(), { requireVision })
+      const list = requireVision
+        ? await fetchOpenRouterModels(apiKey.trim())
+        : await fetchAllTranslationModels(apiKey.trim())
       setModels(list)
       setFetchStatus('done')
     } catch (error) {
@@ -94,11 +96,7 @@ export function ModelCombobox({ apiKey, selectedId, selectedName, onSelect, requ
           <div className="max-h-64 overflow-y-auto p-1">
             {!apiKey.trim() && <div className="p-3 text-xs text-muted-foreground">請先輸入 API Key</div>}
             {fetchStatus === 'error' && <div className="p-3 text-xs text-red-500">{fetchError}</div>}
-            {fetchStatus === 'loading' && (
-              <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />載入模型中…
-              </div>
-            )}
+            {fetchStatus === 'loading' && <div className="p-3 text-xs text-muted-foreground">載入模型中…</div>}
             {fetchStatus === 'done' && filtered.length === 0 && <div className="p-3 text-xs text-muted-foreground">沒有符合的模型</div>}
             {filtered.map(model => (
               <button

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import CanvasEditor from '@/components/canvas/CanvasEditor'
 import { Switch } from '@/components/ui/switch'
-import { Hand, Maximize2, SlidersHorizontal } from 'lucide-react'
+import { Hand, Maximize2, Paintbrush, SlidersHorizontal } from 'lucide-react'
 import type { ActiveTab, SafeAreaVisibility } from '@/types'
 
 type CanvasEditorProps = React.ComponentPropsWithoutRef<typeof CanvasEditor>
@@ -17,6 +17,8 @@ interface CanvasSectionProps {
   showGuidesInPreview: boolean
   showNarrationInOutput: boolean
   showCameraCaptionsInOutput: boolean
+  showMosaicInOutput: boolean
+  isMosaicPaintMode: boolean
   onToggle: (
     key:
       | 'showAllPoints'
@@ -24,9 +26,11 @@ interface CanvasSectionProps {
       | 'showCaptionBox'
       | 'showGuidesInPreview'
       | 'showNarrationInOutput'
-      | 'showCameraCaptionsInOutput',
+      | 'showCameraCaptionsInOutput'
+      | 'showMosaicInOutput',
     val: boolean
   ) => void
+  onMosaicPaintModeChange: (value: boolean) => void
   safeAreaVisibility: SafeAreaVisibility
   onSafeAreaChange: (key: keyof SafeAreaVisibility, val: boolean) => void
   canvasEditorProps: CanvasEditorProps
@@ -36,7 +40,8 @@ export function CanvasSection({
   isDisabled, hasImage, activeTab,
   onOpenImmersiveMode,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview,
-  showNarrationInOutput, showCameraCaptionsInOutput, onToggle,
+  showNarrationInOutput, showCameraCaptionsInOutput, showMosaicInOutput,
+  isMosaicPaintMode, onToggle, onMosaicPaintModeChange,
   safeAreaVisibility, onSafeAreaChange,
   canvasEditorProps,
 }: CanvasSectionProps) {
@@ -124,6 +129,10 @@ export function CanvasSection({
                 <span className="text-xs">鏡頭字幕</span>
                 <Switch checked={showCameraCaptionsInOutput} onCheckedChange={v => onToggle('showCameraCaptionsInOutput', v)} />
               </label>
+              <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                <span className="text-xs">馬賽克</span>
+                <Switch checked={showMosaicInOutput} onCheckedChange={v => onToggle('showMosaicInOutput', v)} />
+              </label>
 
               <div className="h-px bg-border/60" />
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">輔助顯示</p>
@@ -174,12 +183,27 @@ export function CanvasSection({
         {/* Viewport zoom controls */}
         <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg bg-secondary/80 backdrop-blur-sm border border-border/50 p-0.5">
           <button
-            onClick={() => setIsPanMode(v => !v)}
+            onClick={() => {
+              onMosaicPaintModeChange(false)
+              setIsPanMode(v => !v)
+            }}
             className={`h-6 w-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors ${
               isPanMode ? 'bg-primary/20 text-primary' : 'text-muted-foreground'
             }`}
             title={isPanMode ? '關閉移動模式' : '開啟移動模式（拖曳平移視圖）'}
           ><Hand className="h-3 w-3" /></button>
+          <div className="w-px h-3.5 bg-border/60 mx-0.5" />
+          <button
+            onClick={() => {
+              setIsPanMode(false)
+              onMosaicPaintModeChange(!isMosaicPaintMode)
+            }}
+            disabled={isDisabled || !hasImage}
+            className={`h-6 w-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              isMosaicPaintMode ? 'bg-primary/20 text-primary' : 'text-muted-foreground'
+            }`}
+            title={isMosaicPaintMode ? '關閉馬賽克塗抹' : '開啟馬賽克塗抹'}
+          ><Paintbrush className="h-3 w-3" /></button>
           <div className="w-px h-3.5 bg-border/60 mx-0.5" />
           <button
             onClick={() => zoom(-SCALE_STEP)}

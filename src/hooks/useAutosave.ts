@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { ActiveTab, CameraPoint, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
+import type { ActiveTab, CameraPoint, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
 import { clamp, normalizeProjectName } from '@/lib/utils'
+import { normalizeMosaicStrokes } from '@/lib/mosaic'
 import {
   normalizeImageOverlays,
   normalizeNarrationSegments,
@@ -83,11 +84,15 @@ interface UseAutosaveOptions {
   subtitleCues: SubtitleCue[]
   imageOverlays?: ImageOverlay[]
   overlaysLocked?: boolean
+  mosaicStrokes?: MosaicStroke[]
+  showMosaicInOutput?: boolean
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
   setImageOverlays?: Dispatch<SetStateAction<ImageOverlay[]>>
   setOverlaysLocked?: Dispatch<SetStateAction<boolean>>
+  setMosaicStrokes?: Dispatch<SetStateAction<MosaicStroke[]>>
+  setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
   triggerRedraw: () => void
 }
 
@@ -98,11 +103,15 @@ export function useAutosave({
   subtitleCues,
   imageOverlays,
   overlaysLocked,
+  mosaicStrokes,
+  showMosaicInOutput,
   setNarrationInputText,
   setNarrationTrack,
   setSubtitleCues,
   setImageOverlays,
   setOverlaysLocked,
+  setMosaicStrokes,
+  setShowMosaicInOutput,
   triggerRedraw,
 }: UseAutosaveOptions) {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -175,6 +184,8 @@ export function useAutosave({
           subtitleCues,
           imageOverlays: imageOverlays ?? [],
           overlaysLocked: overlaysLocked ?? false,
+          mosaicStrokes: mosaicStrokes ?? [],
+          showMosaicInOutput: showMosaicInOutput ?? true,
         }
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
         if (narrationTrack) {
@@ -187,7 +198,7 @@ export function useAutosave({
       }
     }, 2000)
     return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current) }
-  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText, imageOverlays, overlaysLocked])
+  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText, imageOverlays, overlaysLocked, mosaicStrokes, showMosaicInOutput])
 
   const handleRestoreAutosave = useCallback(async () => {
     if (!pendingRestore) return
@@ -240,10 +251,12 @@ export function useAutosave({
     setNarrationTrack(trackWithAudio)
     setImageOverlays?.(normalizeImageOverlays(project.imageOverlays))
     setOverlaysLocked?.(project.overlaysLocked === true)
+    setMosaicStrokes?.(normalizeMosaicStrokes(project.mosaicStrokes))
+    setShowMosaicInOutput?.(project.showMosaicInOutput !== false)
     setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
     setPendingRestore(null)
     setShowRestoreModal(false)
-  }, [pendingRestore, store, triggerRedraw, setNarrationInputText, setNarrationTrack, setSubtitleCues])
+  }, [pendingRestore, store, triggerRedraw, setNarrationInputText, setNarrationTrack, setSubtitleCues, setMosaicStrokes, setShowMosaicInOutput])
 
   const handleDiscardAutosave = useCallback(() => {
     localStorage.removeItem(AUTOSAVE_KEY)

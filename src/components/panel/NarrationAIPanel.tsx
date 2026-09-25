@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ModelCombobox } from '@/components/ModelCombobox'
-import { createAiTimeoutSignal, fetchOpenRouterModels, isAbortError, parseAiJsonObject, type OpenRouterModelInfo } from '@/lib/openrouter'
+import { createAiTimeoutSignal, isAbortError, parseAiJsonObject } from '@/lib/openrouter'
 import { CAMERA_TEMPLATES } from '@/lib/cameraTemplates'
 import type { SubtitleCue } from '@/types'
 

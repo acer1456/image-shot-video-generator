@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react'
-import type { CameraPoint, BackgroundSettings } from '@/types'
+import type { CameraPoint } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -8,15 +8,14 @@ import { Slider } from '@/components/ui/slider'
 import { Separator } from '@/components/ui/separator'
 import { clamp } from '@/lib/utils'
 import { GripVertical, Plus, Trash2, Copy, ChevronsLeft, ChevronsRight, ChevronDown, ChevronUp, Type } from 'lucide-react'
-import { drawPointThumbnail } from '@/lib/canvas'
+import { drawPointThumbnail, type Scene } from '@/lib/canvas'
 import { CAMERA_TEMPLATES } from '@/lib/cameraTemplates'
 
 interface CameraPanelProps {
   points: CameraPoint[]
   activeIndex: number
   hasImage: boolean
-  image: HTMLImageElement | null
-  backgroundSettings: BackgroundSettings
+  scene: Scene
   onSelect: (index: number) => void
   onRemove: (index: number) => void
   onUpdateField: <K extends keyof CameraPoint>(index: number, field: K, value: CameraPoint[K]) => void
@@ -30,21 +29,20 @@ interface CameraPanelProps {
 
 // 縮圖子元件：在 off-screen canvas 上用 drawPointThumbnail 繪製後顯示
 function CameraThumbnail({
-  point, image, backgroundSettings,
+  scene, pointIndex,
 }: {
-  point: CameraPoint
-  image: HTMLImageElement | null
-  backgroundSettings: BackgroundSettings
+  scene: Scene
+  pointIndex: number
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !image) return
+    if (!canvas || !scene.image) return
     canvas.width = 90
     canvas.height = 160
-    drawPointThumbnail(canvas, image, point, backgroundSettings)
-  }, [point, image, backgroundSettings])
+    drawPointThumbnail(canvas, scene, pointIndex)
+  }, [scene, pointIndex])
 
   return (
     <canvas
@@ -56,7 +54,7 @@ function CameraThumbnail({
 }
 
 export default function CameraPanel({
-  points, activeIndex, hasImage, image, backgroundSettings,
+  points, activeIndex, hasImage, scene,
   onSelect, onRemove, onUpdateField, onAddStart, onAddEnd,
   onInsertAfter, onDuplicate, onReorder, onOpenCaption,
 }: CameraPanelProps) {
@@ -226,7 +224,7 @@ export default function CameraPanel({
                   />
 
                   {/* 9:16 縮圖 */}
-                  <CameraThumbnail point={p} image={image} backgroundSettings={backgroundSettings} />
+                  <CameraThumbnail scene={scene} pointIndex={index} />
 
                   {/* 鏡頭資訊 */}
                   <div className="flex-1 min-w-0">

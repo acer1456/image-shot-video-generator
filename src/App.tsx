@@ -14,15 +14,13 @@ import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
 import { Button } from '@/components/ui/button'
 import { useAppStore, normalizePoint } from '@/hooks/useAppStore'
 import { useAutosave } from '@/hooks/useAutosave'
+import { useHistory } from '@/hooks/useHistory'
 import { useProjectIO } from '@/hooks/useProjectIO'
 import { useVideoRender } from '@/hooks/useVideoRender'
-import type { CameraPoint, CaptionData, DragState, ImageOverlay, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
-import { fileToOverlayDataUrl, getOverlayImage } from '@/lib/overlays'
+import type { CameraPoint, CaptionData, DragState, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
-import {
-  drawCamera as doDrawCamera,
-  getTimelineStateAt, buildTimeline,
-} from '@/lib/canvas'
+import { composeFrame, drawChrome, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
 import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
@@ -41,7 +39,6 @@ function AppInner() {
   const currentTimeRef = useRef(0)
   const previewCancelRef = useRef(false)
   const timelinePanelRef = useRef<TimelinePanelHandle>(null)
-  const lastUiUpdateRef = useRef(0)
   const [snapGuide, setSnapGuide] = useState({ x: false, y: false })
   const [forceRedraw, setForceRedraw] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
@@ -55,6 +52,9 @@ function AppInner() {
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([])
   const [imageOverlays, setImageOverlays] = useState<ImageOverlay[]>([])
   const [overlaysLocked, setOverlaysLocked] = useState(false)
+  const [mosaicStrokes, setMosaicStrokes] = useState<MosaicStroke[]>([])
+  const [showMosaicInOutput, setShowMosaicInOutput] = useState(true)
+  const [isMosaicPaintMode, setIsMosaicPaintMode] = useState(false)
   const [activeSubtitleId, setActiveSubtitleId] = useState<string | null>(null)
   const [narrationInputText, setNarrationInputText] = useState('')
   const [isNarrationCollapsed, setIsNarrationCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1024)
@@ -63,6 +63,21 @@ function AppInner() {
   const narrationSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
   useEffect(() => { setActiveCaptionIndex(0) }, [store.activeIndex])
+
+  // 疊加圖被刪除後，釋放其在模組快取中殘留的已解碼圖片（否則反覆新增/刪除會使記憶體無上限成長）
+  useEffect(() => {
+    pruneOverlayImageCache(new Set(imageOverlays.map(o => o.id)))
+  }, [imageOverlays])
+
+  // __DEBUG_HEAP__ 臨時：拖曳疊加圖時每秒印出 JS heap，確認是否有殘留成長。確認後即刪。
+  useEffect(() => {
+    const id = setInterval(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mem = (performance as any).memory
+      if (mem) console.log('[HEAP]', Math.round(mem.usedJSHeapSize / 1048576), 'MB  overlays:', imageOverlays.length)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [imageOverlays.length])
 
   const triggerRedraw = useCallback(() => setForceRedraw(n => n + 1), [])
 
@@ -85,11 +100,15 @@ function AppInner() {
     subtitleCues,
     imageOverlays,
     overlaysLocked,
+    mosaicStrokes,
+    showMosaicInOutput,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
     setImageOverlays,
     setOverlaysLocked,
+    setMosaicStrokes,
+    setShowMosaicInOutput,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -98,23 +117,62 @@ function AppInner() {
     subtitleCues,
     imageOverlays,
     overlaysLocked,
+    mosaicStrokes,
+    showMosaicInOutput,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
     setImageOverlays,
     setOverlaysLocked,
+    setMosaicStrokes,
+    setShowMosaicInOutput,
     triggerRedraw,
   })
 
-  const totalDuration = useMemo(() => {
-    const { totalDuration: td } = buildTimeline(store.points)
-    const narrationEnd = store.showNarrationInOutput && narrationTrack ? narrationTrack.startTime + getNarrationDuration(narrationTrack) : 0
-    const subtitleEnd = store.showNarrationInOutput
-      ? subtitleCues.reduce((max, cue) => Math.max(max, cue.startTime + cue.duration), 0)
-      : 0
-    const overlayEnd = imageOverlays.reduce((max, overlay) => Math.max(max, overlay.startTime + overlay.duration), 0)
-    return Math.max(td, narrationEnd, subtitleEnd, overlayEnd)
-  }, [store.points, store.showNarrationInOutput, narrationTrack, subtitleCues, imageOverlays])
+  // 一份 Scene 描述整支影片。顯示與否已解析成資料，所以縮圖、時間軸長度、
+  // 之後的預覽都看到同一件事。見 CONTEXT.md 的 Scene。
+  const scene = useMemo<Scene>(() => ({
+    image: store.image ? { width: store.image.width, height: store.image.height, source: store.image } : null,
+    background: store.backgroundSettings,
+    points: store.points,
+    cues: store.showNarrationInOutput ? subtitleCues : [],
+    overlays: imageOverlays,
+    mosaic: showMosaicInOutput ? mosaicStrokes : [],
+    showCameraCaptions: store.showCameraCaptionsInOutput,
+    audioEnd: store.showNarrationInOutput && narrationTrack
+      ? narrationTrack.startTime + getNarrationDuration(narrationTrack)
+      : 0,
+  }), [
+    store.image, store.backgroundSettings, store.points, store.showNarrationInOutput,
+    store.showCameraCaptionsInOutput, subtitleCues, imageOverlays, mosaicStrokes,
+    showMosaicInOutput, narrationTrack,
+  ])
+
+  const totalDuration = useMemo(() => sceneDuration(scene), [scene])
+
+  // ---------- 返回上一步 ----------
+  // 這五樣＋背景就是「專案內容」，全部走不可變更新，所以整包記快照很便宜。
+  const historyDoc = useMemo(() => ({
+    points: store.points,
+    backgroundSettings: store.backgroundSettings,
+    narrationTrack,
+    subtitleCues,
+    imageOverlays,
+    mosaicStrokes,
+  }), [store.points, store.backgroundSettings, narrationTrack, subtitleCues, imageOverlays, mosaicStrokes])
+
+  const restoreSnapshot = useCallback((snapshot: typeof historyDoc) => {
+    store.setPoints(snapshot.points)
+    store.setActiveIndex(index => Math.min(index, snapshot.points.length - 1))
+    store.setBackgroundSettings(snapshot.backgroundSettings)
+    handleNarrationTrackChange(snapshot.narrationTrack)
+    setSubtitleCues(snapshot.subtitleCues)
+    setImageOverlays(snapshot.imageOverlays)
+    setMosaicStrokes(snapshot.mosaicStrokes)
+    triggerRedraw()
+  }, [store, handleNarrationTrackChange, triggerRedraw])
+
+  const { undo, redo, canUndo, canRedo } = useHistory(historyDoc, restoreSnapshot)
 
   // ---------- Canvas drawing helpers exposed to parent ----------
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
@@ -131,6 +189,8 @@ function AppInner() {
     narrationTrack,
     subtitleCues,
     imageOverlays,
+    mosaicStrokes,
+    showMosaic: showMosaicInOutput,
     showNarration: store.showNarrationInOutput,
     showCameraCaptions: store.showCameraCaptionsInOutput,
   })
@@ -169,28 +229,37 @@ function AppInner() {
     triggerRedraw()
   }, [triggerRedraw])
 
+  const handleMosaicStrokeChange = useCallback((stroke: MosaicStroke) => {
+    setMosaicStrokes(prev => {
+      const index = prev.findIndex(item => item.id === stroke.id)
+      if (index === -1) return [...prev, stroke]
+      return prev.map(item => item.id === stroke.id ? stroke : item)
+    })
+    triggerRedraw()
+  }, [triggerRedraw])
+
   const drawTimelineTime = useCallback((time: number, guides: boolean) => {
     const canvas = getCanvas()
-    if (!canvas || !store.image) return
+    if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const state = getTimelineStateAt(store.image, store.points, time)
-    if (!state) return
-    store.setActiveIndex(state.pointIndex)
-    const cue = store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, time) : null
-    const narrationText = getSubtitleRenderText(cue)
-    const captionPoint = store.showCameraCaptionsInOutput ? state.captionPoint : null
-    doDrawCamera(canvas, ctx, store.image, state.camera, store.backgroundSettings, captionPoint, guides && store.showCaptionBox, store.showCaptionBox, snapGuide, 0, narrationText || undefined, cue?.style, imageOverlays, time, false)
-  }, [getCanvas, store, snapGuide, subtitleCues, imageOverlays])
+    // 與匯出完全同一支呼叫；輔助線是另外疊上去的一趟
+    const state = composeFrame(scene, time, ctx)
+    if (guides && store.showCaptionBox) {
+      drawChrome(scene, time, ctx, {
+        activeCaptionIndex: 0,
+        captionBox: store.showCaptionBox,
+        snapGuide,
+        overlayGuides: false,
+      })
+    }
+    if (state) store.setActiveIndex(state.pointIndex)
+  }, [getCanvas, scene, store, snapGuide])
 
-  const getPointFocusTime = useCallback((pointIndex: number) => {
-    const { items } = buildTimeline(store.points)
-    const holdItem = items.find(item => item.pointIndex === pointIndex && item.type === 'hold')
-    if (holdItem) return holdItem.start
-    const moveItem = items.find(item => item.pointIndex === pointIndex && item.type === 'move')
-    if (moveItem) return moveItem.start
-    return 0
-  }, [store.points])
+  const getPointFocusTime = useCallback(
+    (pointIndex: number) => timeOfPoint(store.points, pointIndex),
+    [store.points],
+  )
 
   const selectPointAndSyncTimeline = useCallback((pointIndex: number) => {
     if (pointIndex < 0) {
@@ -210,6 +279,21 @@ function AppInner() {
     setCurrentTime(t)
     triggerRedraw()
   }, [store, getPointFocusTime, drawTimelineTime, triggerRedraw])
+
+  const selectSubtitleAndSyncTimeline = useCallback((id: string | null) => {
+    setActiveSubtitleId(id)
+    const cue = id ? subtitleCues.find(c => c.id === id) : null
+    if (!cue) return
+    previewCancelRef.current = true
+    store.setIsPreviewing(false)
+    const t = cue.startTime
+    drawTimelineTime(t, store.showGuidesInPreview)
+    timelinePanelRef.current?.setTimeCursor(t)
+    timelinePanelRef.current?.revealTime(t)
+    currentTimeRef.current = t
+    setCurrentTime(t)
+    triggerRedraw()
+  }, [store, subtitleCues, drawTimelineTime, triggerRedraw])
 
   // ---------- Preview ----------
   const previewPath = useCallback(async () => {
@@ -234,12 +318,8 @@ function AppInner() {
       timelinePanelRef.current?.setTimeCursor(t)
       timelinePanelRef.current?.revealTime(t, false)
       currentTimeRef.current = t
-      // Throttle React state update (~15fps) — only drives the time display text
-      const now = performance.now()
-      if (now - lastUiUpdateRef.current >= 66) {
-        setCurrentTime(t)
-        lastUiUpdateRef.current = now
-      }
+      // 播放中完全不碰 React state：游標與讀數都由 setTimeCursor 直接寫 DOM。
+      // 之前每 66ms setCurrentTime 一次，會連帶重繪整個側欄的鏡頭清單。
       if (t >= totalDuration) break
       await nextFrame()
     }
@@ -507,6 +587,17 @@ function AppInner() {
   const isDisabled = store.isRendering
   const activeSubtitleCue = store.showNarrationInOutput ? subtitleCues.find(cue => cue.id === activeSubtitleId) ?? null : null
   const currentSubtitleCue = activeSubtitleCue ?? (store.showNarrationInOutput ? getActiveSubtitleCue(subtitleCues, currentTimeRef.current) : null)
+  // 編輯器看到的 Scene 與輸出略有不同，差異全部表達成資料：
+  //  · 顯示「目前選取」的字幕，而不是時間軸上那一則 → 用一則涵蓋全時段的 cue
+  //  · 塗馬賽克時即使輸出關閉也要看得見
+  const editorScene = useMemo<Scene>(() => ({
+    ...scene,
+    cues: currentSubtitleCue
+      ? [{ ...currentSubtitleCue, startTime: 0, duration: Number.MAX_SAFE_INTEGER }]
+      : [],
+    mosaic: (showMosaicInOutput || isMosaicPaintMode) ? mosaicStrokes : [],
+  }), [scene, currentSubtitleCue, showMosaicInOutput, isMosaicPaintMode, mosaicStrokes])
+
   const updateActiveSubtitleStyle = (pos: { x: number; y: number }) => {
     if (!currentSubtitleCue) return
     setSubtitleCues(cues => cues.map(cue =>
@@ -517,6 +608,7 @@ function AppInner() {
   }
 
   const canvasEditorProps = {
+    scene: editorScene,
     image: store.image,
     points: store.points,
     activeIndex: store.activeIndex,
@@ -555,6 +647,10 @@ function AppInner() {
     imageOverlays,
     overlaysLocked,
     onOverlayChange: handleOverlayChange,
+    mosaicStrokes,
+    showMosaic: showMosaicInOutput || isMosaicPaintMode,
+    isMosaicPaintMode,
+    onMosaicStrokeChange: handleMosaicStrokeChange,
   } as React.ComponentPropsWithoutRef<typeof CanvasEditor>
 
   return (
@@ -566,9 +662,7 @@ function AppInner() {
         renderProgress={renderProgress}
         hasImage={!!store.image}
         hasPoints={!!store.points.length}
-        image={store.image}
-        points={store.points}
-        backgroundSettings={store.backgroundSettings}
+        scene={scene}
         projectName={store.projectName}
         activeTab={store.activeTab}
         onTabChange={tab => { store.setActiveTab(tab); triggerRedraw() }}
@@ -584,6 +678,10 @@ function AppInner() {
         onSave={saveProject}
         onClearPoints={() => store.clearPoints()}
         onRequestFullscreen={requestFullscreen}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={canUndo}
+        canRedo={canRedo}
       />
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto lg:overflow-hidden p-2 gap-2">
@@ -594,7 +692,7 @@ function AppInner() {
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
             activeSubtitleId={activeSubtitleId}
-            onActiveSubtitleIdChange={setActiveSubtitleId}
+            onActiveSubtitleIdChange={selectSubtitleAndSyncTimeline}
             inputText={narrationInputText}
             onInputTextChange={setNarrationInputText}
             image={store.image}
@@ -615,6 +713,8 @@ function AppInner() {
             showGuidesInPreview={store.showGuidesInPreview}
             showNarrationInOutput={store.showNarrationInOutput}
             showCameraCaptionsInOutput={store.showCameraCaptionsInOutput}
+            showMosaicInOutput={showMosaicInOutput}
+            isMosaicPaintMode={isMosaicPaintMode}
             onToggle={(key, val) => {
               if (key === 'showAllPoints') store.setShowAllPoints(val)
               else if (key === 'onlyActiveBox') store.setOnlyActiveBox(val)
@@ -625,8 +725,10 @@ function AppInner() {
                 if (!val) stopNarrationAudio(narrationSourcesRef)
               }
               else if (key === 'showCameraCaptionsInOutput') store.setShowCameraCaptionsInOutput(val)
+              else if (key === 'showMosaicInOutput') setShowMosaicInOutput(val)
               triggerRedraw()
             }}
+            onMosaicPaintModeChange={setIsMosaicPaintMode}
             safeAreaVisibility={store.safeAreaVisibility}
             onSafeAreaChange={(key, val) => { store.setSafeAreaVisibility({ ...store.safeAreaVisibility, [key]: val }); triggerRedraw() }}
             canvasEditorProps={canvasEditorProps}
@@ -638,7 +740,7 @@ function AppInner() {
             activeTab={store.activeTab}
             activePoint={activePoint}
             activeCaptionIndex={activeCaptionIndex}
-            image={store.image}
+            scene={scene}
             backgroundSettings={store.backgroundSettings}
             collapsed={isEditorSidebarCollapsed}
             onToggleCollapse={() => setIsEditorSidebarCollapsed(v => !v)}
@@ -724,7 +826,7 @@ function AppInner() {
             onNarrationTrackChange={handleNarrationTrackChange}
             subtitleCues={subtitleCues}
             onSubtitleCuesChange={setSubtitleCues}
-            onSubtitleSelect={setActiveSubtitleId}
+            onSubtitleSelect={selectSubtitleAndSyncTimeline}
             imageOverlays={imageOverlays}
             onImageOverlaysChange={handleImageOverlaysChange}
             overlaysLocked={overlaysLocked}

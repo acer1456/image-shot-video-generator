@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { CameraPoint, ActiveTab, ImageOverlay, NarrationTrack, SubtitleCue } from '@/types'
+import type { CameraPoint, ActiveTab, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
+import { normalizeMosaicStrokes } from '@/lib/mosaic'
 import { OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName, sanitizeFileName, getTodayString } from '@/lib/utils'
 import {
   normalizeImageOverlays,
@@ -18,11 +19,15 @@ interface UseProjectIOOptions {
   subtitleCues: SubtitleCue[]
   imageOverlays?: ImageOverlay[]
   overlaysLocked?: boolean
+  mosaicStrokes?: MosaicStroke[]
+  showMosaicInOutput?: boolean
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
   setImageOverlays?: Dispatch<SetStateAction<ImageOverlay[]>>
   setOverlaysLocked?: Dispatch<SetStateAction<boolean>>
+  setMosaicStrokes?: Dispatch<SetStateAction<MosaicStroke[]>>
+  setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
 }
 
 export function useProjectIO(store: AppStore, triggerRedraw: () => void, options?: UseProjectIOOptions) {
@@ -101,6 +106,8 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
         subtitleCues: options?.subtitleCues ?? [],
         imageOverlays: options?.imageOverlays ?? [],
         overlaysLocked: options?.overlaysLocked ?? false,
+        mosaicStrokes: options?.mosaicStrokes ?? [],
+        showMosaicInOutput: options?.showMosaicInOutput ?? true,
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -136,6 +143,8 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
       options?.setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
       options?.setImageOverlays?.(normalizeImageOverlays(project.imageOverlays))
       options?.setOverlaysLocked?.(project.overlaysLocked === true)
+      options?.setMosaicStrokes?.(normalizeMosaicStrokes(project.mosaicStrokes))
+      options?.setShowMosaicInOutput?.(project.showMosaicInOutput !== false)
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }

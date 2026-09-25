@@ -1,17 +1,20 @@
 import { useRef, useEffect, useCallback } from 'react'
-import type { CameraPoint, BackgroundSettings, ImageOverlay, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
-import { drawOverlays, findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
+import type { CameraPoint, BackgroundSettings, ImageOverlay, MosaicStroke, SafeAreaVisibility, ActiveTab, DragState, SubtitleStyle } from '@/types'
+import { findOverlayHit, getOverlayCanvasRect } from '@/lib/overlays'
 import {
   OUTPUT_W, OUTPUT_H, clamp, distance
 } from '@/lib/utils'
 import {
-  fitImageRect, getCameraForPoint, getViewBoxCanvas,
-  drawCamera, drawCaptionSafeArea, getCaptionLayout, getAllCaptions,
-  imageToCanvasPoint, canvasToImageRatio, drawOutputBackground
+  fitImageRect, getViewBoxCanvas, getCameraSourceRect,
+  composeFrame, composeSourceView, drawChrome, timeOfPoint,
+  getCaptionLayout, getAllCaptions,
+  imageToCanvasPoint, canvasToImageRatio, type Scene
 } from '@/lib/canvas'
 import { useTheme } from 'next-themes'
 
 interface CanvasEditorProps {
+  /** 編輯器要畫的內容。與匯出共用同一組 layer，只是多疊一層 chrome。 */
+  scene: Scene
   image: HTMLImageElement | null
   points: CameraPoint[]
   activeIndex: number
@@ -50,6 +53,10 @@ interface CanvasEditorProps {
   imageOverlays?: ImageOverlay[]
   overlaysLocked?: boolean
   onOverlayChange?: (id: string, patch: Partial<ImageOverlay>) => void
+  mosaicStrokes?: MosaicStroke[]
+  showMosaic?: boolean
+  isMosaicPaintMode?: boolean
+  onMosaicStrokeChange?: (stroke: MosaicStroke) => void
 }
 
 interface CaptionDragPreview {
@@ -61,6 +68,7 @@ interface CaptionDragPreview {
 }
 
 export default function CanvasEditor({
+  scene,
   image, points, activeIndex, activeTab,
   backgroundSettings, safeAreaVisibility,
   showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput,
@@ -72,11 +80,17 @@ export default function CanvasEditor({
   activeCaptionIndex = 0, onCaptionSelect,
   narrationText, subtitleStyle, onSubtitlePositionChange,
   imageOverlays = [], overlaysLocked = false, onOverlayChange,
+  mosaicStrokes = [], showMosaic = true, isMosaicPaintMode = false, onMosaicStrokeChange,
 }: CanvasEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawBaseRef = useRef<(() => void) | null>(null)
   const captionDragPreviewRef = useRef<CaptionDragPreview | null>(null)
   const captionDragFrameRef = useRef<number | null>(null)
+  const mosaicStrokeRef = useRef<MosaicStroke | null>(null)
+  // 疊加圖拖曳／縮放：合併到每個動畫幀套一次。React onPointerMove 不會合併原生事件，
+  // 高頻指標裝置一幀內可觸發數十次；若每次都 setState + 全幅重繪會塞爆主執行緒導致當機。
+  const overlayDragFrameRef = useRef<number | null>(null)
+  const overlayDragPatchRef = useRef<{ id: string; patch: Partial<ImageOverlay> } | null>(null)
   const { resolvedTheme } = useTheme()
 
   const getCssVar = useCallback((name: string, fallback: string) => {
@@ -122,27 +136,35 @@ export default function CanvasEditor({
     const scheduleOverlayRedraw = () => requestAnimationFrame(() => drawBaseRef.current?.())
 
     if (activeTab === 'caption' && activeIndex >= 0 && points[activeIndex]) {
-      const camera = getCameraForPoint(image, points[activeIndex])
-      const captionPoint = showCameraCaptionsInOutput ? points[activeIndex] : null
-      drawCamera(canvas, ctx, image, camera, backgroundSettings, captionPoint, showGuides && showCaptionBox, showCaptionBox, snapGuide, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, currentTimeRef.current, !overlaysLocked)
-      if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
+      const t = timeOfPoint(scene.points, activeIndex)
+      composeFrame(scene, t, ctx)
+      if (showGuides) {
+        drawChrome(scene, t, ctx, {
+          activeCaptionIndex,
+          captionBox: showCaptionBox,
+          snapGuide,
+          overlayGuides: !overlaysLocked,
+          safeArea: safeAreaVisibility,
+        })
+      }
       return
     }
 
-    const r = fitImageRect(canvas, image)
-    ctx.fillStyle = canvasBg
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(image, r.x, r.y, r.w, r.h)
-
-    if (showGuides) drawEditorGuides(canvas, ctx)
-    // 疊加圖以輸出畫面座標繪製；編輯模式下顯示框線與縮放 handle（鎖定時只顯示不可拖）
-    if (imageOverlays.length) {
-      drawOverlays(canvas, ctx, imageOverlays, currentTimeRef.current, {
-        guides: showGuides && !overlaysLocked,
-        onImageLoad: scheduleOverlayRedraw,
-      })
+    // 相機分頁看的是原圖檢視：同一個 Scene，只是換一種投影
+    composeSourceView(scene, currentTimeRef.current, ctx, canvasBg, scheduleOverlayRedraw)
+    if (showGuides) {
+      drawEditorGuides(canvas, ctx)
+      // 疊加圖框線與縮放 handle（鎖定時只顯示不可拖）
+      if (!overlaysLocked) {
+        drawChrome(scene, currentTimeRef.current, ctx, {
+          activeCaptionIndex: 0,
+          captionBox: false,
+          snapGuide: { x: false, y: false },
+          overlayGuides: true,
+        })
+      }
     }
-  }, [image, points, activeIndex, activeTab, backgroundSettings, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, showCameraCaptionsInOutput, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, narrationText, subtitleStyle, imageOverlays, overlaysLocked, currentTimeRef])
+  }, [scene, image, points, activeIndex, activeTab, safeAreaVisibility, showAllPoints, onlyActiveBox, showCaptionBox, showGuidesInPreview, isRendering, isPreviewing, snapGuide, resolvedTheme, activeCaptionIndex, imageOverlays, overlaysLocked, mosaicStrokes, showMosaic, currentTimeRef])
 
   const drawCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
     const canvas = canvasRef.current
@@ -170,35 +192,33 @@ export default function CanvasEditor({
     }
 
     const showGuides = !isRendering && (!isPreviewing || showGuidesInPreview)
-    const camera = getCameraForPoint(image, point)
-    const captionPoint = showCameraCaptionsInOutput ? previewPoint : null
-    drawCamera(
-      canvas,
-      ctx,
-      image,
-      camera,
-      backgroundSettings,
-      captionPoint,
-      showGuides && showCaptionBox,
-      showCaptionBox,
-      preview.snapGuide,
-      preview.captionIndex,
-      narrationText,
-      subtitleStyle,
-    )
-    if (showGuides) drawCaptionSafeArea(canvas, ctx, safeAreaVisibility)
+    // 拖曳中的字幕位置以 Scene 表示，不另外開一條繪製路徑
+    const previewScene: Scene = {
+      ...scene,
+      points: scene.points.map((p, i) => i === preview.pointIndex ? previewPoint : p),
+    }
+    const t = timeOfPoint(previewScene.points, preview.pointIndex)
+    composeFrame(previewScene, t, ctx)
+    if (showGuides) {
+      drawChrome(previewScene, t, ctx, {
+        activeCaptionIndex: preview.captionIndex,
+        captionBox: showCaptionBox,
+        snapGuide: preview.snapGuide,
+        // ponytail: 沿用原本行為——拖曳字幕時不畫疊加圖把手。
+        // 與 drawBase 的 !overlaysLocked 不一致，是既有的閃爍，不在本次改動範圍。
+        overlayGuides: false,
+        safeArea: safeAreaVisibility,
+      })
+    }
   }, [
-    backgroundSettings,
+    scene,
     image,
     isPreviewing,
     isRendering,
-    narrationText,
     points,
     safeAreaVisibility,
-    showCameraCaptionsInOutput,
     showCaptionBox,
     showGuidesInPreview,
-    subtitleStyle,
   ])
 
   const scheduleCaptionDragPreview = useCallback((preview: CaptionDragPreview) => {
@@ -211,8 +231,19 @@ export default function CanvasEditor({
     })
   }, [drawCaptionDragPreview])
 
+  const scheduleOverlayDrag = useCallback((id: string, patch: Partial<ImageOverlay>) => {
+    overlayDragPatchRef.current = { id, patch }
+    if (overlayDragFrameRef.current != null) return
+    overlayDragFrameRef.current = requestAnimationFrame(() => {
+      overlayDragFrameRef.current = null
+      const pending = overlayDragPatchRef.current
+      if (pending) onOverlayChange?.(pending.id, pending.patch)
+    })
+  }, [onOverlayChange])
+
   useEffect(() => () => {
     if (captionDragFrameRef.current != null) cancelAnimationFrame(captionDragFrameRef.current)
+    if (overlayDragFrameRef.current != null) cancelAnimationFrame(overlayDragFrameRef.current)
   }, [])
 
   const drawEditorGuides = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
@@ -439,6 +470,20 @@ export default function CanvasEditor({
     target.setPointerCapture(event.pointerId)
     const pos = getCanvasPointer(event)
 
+    if (isMosaicPaintMode && onMosaicStrokeChange && canvasRef.current) {
+      const rect = fitImageRect(canvasRef.current, image)
+      if (pos.x < rect.x || pos.x > rect.x + rect.w || pos.y < rect.y || pos.y > rect.y + rect.h) return
+      const ratio = canvasToImageRatio(canvasRef.current, image, pos.x, pos.y)
+      const stroke: MosaicStroke = {
+        id: crypto.randomUUID(),
+        brushSize: Math.max(18, Math.round(image.width * 0.045)),
+        points: [ratio],
+      }
+      mosaicStrokeRef.current = stroke
+      onMosaicStrokeChange(stroke)
+      return
+    }
+
     // 疊加圖優先命中（未鎖定時）；鎖定後 canvas 完全不理會疊加圖
     if (!overlaysLocked && imageOverlays.length && onOverlayChange && canvasRef.current) {
       const hit = findOverlayHit(canvasRef.current, imageOverlays, currentTimeRef.current, pos.x, pos.y)
@@ -541,8 +586,24 @@ export default function CanvasEditor({
 
   const handlePointerMove = (event: React.PointerEvent) => {
     const canvas = canvasRef.current
-    if (!canvas || !image || !dragStateRef.current || isRendering) return
+    if (!canvas || !image || isRendering) return
     const pos = getCanvasPointer(event)
+
+    if (isMosaicPaintMode && mosaicStrokeRef.current && onMosaicStrokeChange) {
+      const rect = fitImageRect(canvas, image)
+      if (pos.x < rect.x || pos.x > rect.x + rect.w || pos.y < rect.y || pos.y > rect.y + rect.h) return
+      const ratio = canvasToImageRatio(canvas, image, pos.x, pos.y)
+      const current = mosaicStrokeRef.current
+      const last = current.points[current.points.length - 1]
+      if (!last || distance(ratio.x, ratio.y, last.x, last.y) >= 0.003) {
+        const next = { ...current, points: [...current.points, ratio] }
+        mosaicStrokeRef.current = next
+        onMosaicStrokeChange(next)
+      }
+      return
+    }
+
+    if (!dragStateRef.current) return
     const drag = dragStateRef.current
 
     if (drag.type === 'overlayMove' || drag.type === 'overlayResize') {
@@ -550,14 +611,14 @@ export default function CanvasEditor({
       const overlay = imageOverlays.find(o => o.id === drag.overlayId)
       if (!overlay) return
       if (drag.type === 'overlayMove') {
-        onOverlayChange(overlay.id, {
+        scheduleOverlayDrag(overlay.id, {
           x: clamp((pos.x - (drag.offsetX ?? 0)) / canvas.width, 0, 1),
           y: clamp((pos.y - (drag.offsetY ?? 0)) / canvas.height, 0, 1),
         })
       } else {
         // 以中心到指標的水平距離推導寬度
         const halfW = Math.abs(pos.x - overlay.x * canvas.width)
-        onOverlayChange(overlay.id, { scale: clamp(halfW * 2 / canvas.width, 0.05, 1.5) })
+        scheduleOverlayDrag(overlay.id, { scale: clamp(halfW * 2 / canvas.width, 0.05, 1.5) })
       }
       return
     }
@@ -593,12 +654,9 @@ export default function CanvasEditor({
       const center = imageToCanvasPoint(canvas, image, p)
       const desiredW = Math.abs(pos.x - center.x) * 2 / r.w * image.width
       const desiredH = Math.abs(pos.y - center.y) * 2 / r.h * image.height
-      const naturalRatio = image.width / image.height
-      let baseW: number, baseH: number
-      const OUTPUT_RATIO = OUTPUT_W / OUTPUT_H
-      if (naturalRatio > OUTPUT_RATIO) { baseW = image.width; baseH = baseW / OUTPUT_RATIO }
-      else { baseH = image.height; baseW = baseH * OUTPUT_RATIO }
-      const zoom = clamp(Math.min(baseW / Math.max(1, desiredW), baseH / Math.max(1, desiredH)), 1, 15)
+      // zoom=1 的取景範圍就是 base 尺寸；共用 getCameraSourceRect，不再自己算一次
+      const base = getCameraSourceRect(image, { ...p, zoom: 1 })
+      const zoom = clamp(Math.min(base.sw / Math.max(1, desiredW), base.sh / Math.max(1, desiredH)), 1, 15)
       onPointResize(drag.index, zoom)
     }
     if (drag.type === 'captionMove') {
@@ -676,6 +734,7 @@ export default function CanvasEditor({
       onCaptionMove(preview.pointIndex, preview.captionIndex, preview.x, preview.y)
     }
     captionDragPreviewRef.current = null
+    mosaicStrokeRef.current = null
     dragStateRef.current = null
     setSnapGuide({ x: false, y: false })
     onDragEnd()
@@ -705,7 +764,7 @@ export default function CanvasEditor({
           maxWidth: '100%',
           aspectRatio: '9/16',
           display: 'block',
-          cursor: 'crosshair',
+          cursor: isMosaicPaintMode ? 'cell' : 'crosshair',
           borderRadius: '12px',
           border: '1px solid hsl(var(--border))',
         }}

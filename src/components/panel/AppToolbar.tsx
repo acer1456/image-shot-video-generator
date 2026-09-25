@@ -7,14 +7,15 @@ import { Switch } from '@/components/ui/switch'
 import {
   Sun, Moon, Save, FolderOpen, Trash2, Film,
   Maximize, Upload, ChevronDown, Sparkles, Palette, Loader2, ImagePlus,
-  MoreHorizontal, Download,
+  MoreHorizontal, Download, Undo2, Redo2,
 } from 'lucide-react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
 import type { VideoRenderMethod } from '@/hooks/useVideoRender'
 import ScreenDownload from '@/components/ScreenDownload'
-import type { ActiveTab, BackgroundSettings, CameraPoint } from '@/types'
+import type { ActiveTab } from '@/types'
+import type { Scene } from '@/lib/canvas'
 
 
 interface AppToolbarProps {
@@ -24,9 +25,7 @@ interface AppToolbarProps {
   renderProgress: number
   hasImage: boolean
   hasPoints: boolean
-  image: HTMLImageElement | null
-  points: CameraPoint[]
-  backgroundSettings: BackgroundSettings
+  scene: Scene
   projectName: string
   activeTab: ActiveTab
   onTabChange: (tab: 'camera' | 'caption') => void
@@ -42,16 +41,21 @@ interface AppToolbarProps {
   onSave: () => void
   onClearPoints: () => void
   onRequestFullscreen: () => void
+  onUndo: () => void
+  onRedo: () => void
+  canUndo: boolean
+  canRedo: boolean
 }
 
 export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
-  hasImage, hasPoints, image, points, backgroundSettings, projectName,
+  hasImage, hasPoints, scene, projectName,
   activeTab, onTabChange,
   fileInputRef, loadProjectInputRef,
   onProjectNameChange, onImageFile, onOverlayImageFile, onLoadFile,
   onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
   onSave, onClearPoints, onRequestFullscreen,
+  onUndo, onRedo, canUndo, canRedo,
 }: AppToolbarProps) {
   const { theme, setTheme } = useTheme()
   const overlayInputRef = useRef<HTMLInputElement>(null)
@@ -75,6 +79,18 @@ export function AppToolbar({
           placeholder="未命名專案"
           title="專案名稱"
         />
+      </div>
+
+      <Separator orientation="vertical" className="h-6 mx-1.5 opacity-60" />
+
+      {/* 返回上一步 / 重做 */}
+      <div className="flex items-center gap-0.5">
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground" onClick={onUndo} disabled={isDisabled || !canUndo} title="返回上一步（⌘/Ctrl+Z）">
+          <Undo2 className="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground" onClick={onRedo} disabled={isDisabled || !canRedo} title="重做（⌘⇧Z / Ctrl+Y）">
+          <Redo2 className="h-4 w-4" />
+        </Button>
       </div>
 
       <Separator orientation="vertical" className="h-6 mx-1.5 opacity-60" />
@@ -164,9 +180,7 @@ export function AppToolbar({
         </Button>
 
         <ScreenDownload
-          image={image}
-          points={points}
-          backgroundSettings={backgroundSettings}
+          scene={scene}
           projectName={projectName}
           disabled={isDisabled || isRendering}
         />

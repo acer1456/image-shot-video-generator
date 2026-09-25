@@ -19,6 +19,9 @@ export default defineConfig({
       workbox: {
         maximumFileSizeToCacheInBytes: 30 * 1024 * 1024, // 30 MiB — covers WASM + kokoro bundle
         navigateFallbackDenylist: isPreviewBuild ? [] : [/\/preview\//],
+        // ONNX runtime + transformers 只有在使用者上傳旁白音訊做強制對齊時才會動態載入。
+        // 不排除的話 precache 會從 ~2MB 膨脹到 ~24MB，每個人首次開啟都得先下載。
+        globIgnores: ['**/tts-*.js', '**/*.wasm'],
       },
       manifest: {
         name: '畫作鏡頭影片產生器',
@@ -42,7 +45,12 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    exclude: ['@huggingface/transformers', 'kokoro-js']
+    exclude: ['@huggingface/transformers', 'kokoro-js'],
+    // Only reached via dynamic import() inside src/lib/chinese.ts — without this,
+    // Vite discovers them on first use, triggers a re-optimize + full reload, and
+    // orphans that in-flight import (surfaces as "Failed to fetch dynamically
+    // imported module" during video export).
+    include: ['opencc-js/cn2t', 'opencc-js/t2cn'],
   },
   build: {
     // Large dictionary/model helper chunks are loaded only when the user requests

@@ -2,16 +2,13 @@ import { useState } from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { BackgroundSettings, CameraPoint } from '@/types'
-import { drawCaption, drawOutputBackground, getAllCaptions } from '@/lib/canvas'
+import { composeFrame, timeOfPoint, type Scene } from '@/lib/canvas'
 import { OUTPUT_H, OUTPUT_W, getTodayString, sanitizeFileName } from '@/lib/utils'
 
 type ScreenDownloadSize = 'portrait-4-5' | 'square-1-1' | 'original'
 
 interface ScreenDownloadProps {
-  image: HTMLImageElement | null
-  points: CameraPoint[]
-  backgroundSettings: BackgroundSettings
+  scene: Scene
   projectName: string
   disabled?: boolean
 }
@@ -130,59 +127,6 @@ function makeZip(files: { path: string; bytes: Uint8Array }[]) {
   return new Blob([concatBytes([...localParts, ...centralParts, end])], { type: 'application/zip' })
 }
 
-function getCameraSourceRect(image: HTMLImageElement, point: CameraPoint, outputRatio: number) {
-  const naturalRatio = image.width / image.height
-  let baseW: number
-  let baseH: number
-  if (naturalRatio > outputRatio) {
-    baseW = image.width
-    baseH = baseW / outputRatio
-  } else {
-    baseH = image.height
-    baseW = baseH * outputRatio
-  }
-  const sw = baseW / point.zoom
-  const sh = baseH / point.zoom
-  return {
-    sx: point.x * image.width - sw / 2,
-    sy: point.y * image.height - sh / 2,
-    sw,
-    sh,
-  }
-}
-
-function drawScreen(
-  canvas: HTMLCanvasElement,
-  image: HTMLImageElement,
-  point: CameraPoint,
-  backgroundSettings: BackgroundSettings
-) {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('無法取得 canvas context')
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  drawOutputBackground(canvas, ctx, image, backgroundSettings)
-
-  const src = getCameraSourceRect(image, point, canvas.width / canvas.height)
-  const ix = Math.max(0, src.sx)
-  const iy = Math.max(0, src.sy)
-  const ix2 = Math.min(image.width, src.sx + src.sw)
-  const iy2 = Math.min(image.height, src.sy + src.sh)
-  const iw = ix2 - ix
-  const ih = iy2 - iy
-
-  if (iw > 0 && ih > 0) {
-    const dx = ((ix - src.sx) / src.sw) * canvas.width
-    const dy = ((iy - src.sy) / src.sh) * canvas.height
-    const dw = (iw / src.sw) * canvas.width
-    const dh = (ih / src.sh) * canvas.height
-    ctx.drawImage(image, ix, iy, iw, ih, dx, dy, dw, dh)
-  }
-
-  getAllCaptions(point).forEach(cap => {
-    drawCaption(canvas, ctx, cap, false, { x: false, y: false })
-  })
-}
-
 function canvasToPngBlob(canvas: HTMLCanvasElement) {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(blob => {
@@ -193,28 +137,31 @@ function canvasToPngBlob(canvas: HTMLCanvasElement) {
 }
 
 export default function ScreenDownload({
-  image,
-  points,
-  backgroundSettings,
+  scene,
   projectName,
   disabled = false,
 }: ScreenDownloadProps) {
   const [isDownloading, setIsDownloading] = useState(false)
 
   const downloadScreens = async (sizeKey: ScreenDownloadSize) => {
-    if (!image || !points.length || isDownloading) return
+    if (!scene.image || !scene.points.length || isDownloading) return
     setIsDownloading(true)
     try {
       const size = SCREEN_DOWNLOAD_SIZES[sizeKey]
       const canvas = document.createElement('canvas')
       canvas.width = size.width
       canvas.height = size.height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('無法取得 canvas context')
+      // 截圖只要鏡頭取景與字幕，不要旁白字幕與疊加圖——但馬賽克要跟著，
+      // 它是圖片內容的一部分。取景比例由畫布尺寸決定，4:5 / 1:1 都走同一套邏輯。
+      const still: Scene = { ...scene, cues: [], overlays: [], showCameraCaptions: true }
       const baseName = sanitizeFileName(projectName)
       const folderName = `${baseName}-${size.width}x${size.height}`
       const files = []
 
-      for (let i = 0; i < points.length; i++) {
-        drawScreen(canvas, image, points[i], backgroundSettings)
+      for (let i = 0; i < still.points.length; i++) {
+        composeFrame(still, timeOfPoint(still.points, i), ctx)
         const blob = await canvasToPngBlob(canvas)
         files.push({
           path: `${folderName}/${baseName}-${String(i + 1).padStart(2, '0')}.png`,
@@ -242,7 +189,7 @@ export default function ScreenDownload({
   return (
     <DropdownMenuPrimitive.Root>
       <DropdownMenuPrimitive.Trigger asChild>
-        <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg text-muted-foreground hover:text-foreground" title="下載目前畫面截圖" disabled={disabled || !image || !points.length || isDownloading}>
+        <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg text-muted-foreground hover:text-foreground" title="下載目前畫面截圖" disabled={disabled || !scene.image || !scene.points.length || isDownloading}>
           {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           <span className="hidden lg:inline text-xs">下載畫面</span>
           <ChevronDown className="h-3 w-3 opacity-70" />
