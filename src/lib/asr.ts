@@ -8,8 +8,11 @@ const CTC_MODEL = 'Xenova/wav2vec2-base-960h'
 /** wav2vec2 要求 16kHz 單聲道；直接餵原始取樣率會靜默產生錯誤的對齊 */
 const TARGET_SAMPLE_RATE = 16000
 
-/** 一次送進模型的最長秒數。太長會爆記憶體；分段之間直接接續 frame。 */
-const SEGMENT_SECONDS = 60
+/**
+ * 一次送進模型的最長秒數。分段之間直接接續 frame。
+ * 注意力矩陣隨長度平方成長：實測 60s 一段峰值 RSS ≈ 2.27GB（瀏覽器分頁會崩），20s ≈ 1.58GB。
+ */
+const SEGMENT_SECONDS = 20
 
 export interface CtcEmissions {
   /** 攤平的 [numFrames × vocabSize] log 機率 */
