@@ -42,6 +42,20 @@ export interface CarouselCard {
   imageY: number       // 畫作中心垂直位置 0–1
 }
 
+/** AI 輪播解析的附帶資料：給創作者邊看邊改，不放進圖片；隨專案存檔 */
+export interface CarouselNotes {
+  plan: string
+  research: string
+  sources: Array<{ name: string; url: string; note: string }>
+}
+
+/** AI 輪播解析的一張：原圖上的框（0–1 正規化）＋英文句＋中文翻譯 */
+export interface CarouselInsight {
+  box: { left: number; top: number; right: number; bottom: number }
+  en: string
+  zh: string
+}
+
 export interface CameraPoint {
   x: number
   y: number
@@ -127,6 +141,7 @@ export interface ProjectData {
   /** IG 輪播投影片：沿用 CameraPoint（x/y/zoom/caption），move 與時長欄位不使用。 */
   carouselSlides?: CameraPoint[]
   carouselBackground?: BackgroundSettings
+  carouselNotes?: CarouselNotes | null
 }
 
 export type EditorMode = 'video' | 'carousel'

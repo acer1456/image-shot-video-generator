@@ -9,6 +9,7 @@ import { AppToolbar } from '@/components/panel/AppToolbar'
 import { CanvasSection } from '@/components/canvas/CanvasSection'
 import { EditorSidebar } from '@/components/panel/EditorSidebar'
 import { CarouselPanel } from '@/components/panel/CarouselPanel'
+import { CarouselNotesPanel } from '@/components/panel/CarouselNotesPanel'
 import { NarrationSidebar } from '@/components/panel/NarrationSidebar'
 import type { NarrationAICameraResult, NarrationAIStoryResult } from '@/components/panel/NarrationAIPanel'
 import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
@@ -108,6 +109,7 @@ function AppInner() {
     showMosaicInOutput,
     carouselSlides: carousel.slides,
     carouselBackground: carousel.background,
+    carouselNotes: carousel.notes,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -117,6 +119,7 @@ function AppInner() {
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
     setCarouselBackground: carousel.setBackground,
+    setCarouselNotes: carousel.setNotes,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -129,6 +132,7 @@ function AppInner() {
     showMosaicInOutput,
     carouselSlides: carousel.slides,
     carouselBackground: carousel.background,
+    carouselNotes: carousel.notes,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -138,6 +142,7 @@ function AppInner() {
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
     setCarouselBackground: carousel.setBackground,
+    setCarouselNotes: carousel.setNotes,
     triggerRedraw,
   })
 
@@ -682,7 +687,8 @@ function AppInner() {
     overlays: [],
     showCameraCaptions: true,
     audioEnd: 0,
-  }), [scene, carousel.slides, carousel.background])
+    credit: carousel.credit,
+  }), [scene, carousel.slides, carousel.background, carousel.credit])
 
   // 封面／封底沒有取景，選到它們時畫布一律顯示成品預覽（字幕投影），文字可直接拖曳
   const isCardActive = !!carousel.slides[carousel.activeIndex]?.card
@@ -788,6 +794,10 @@ function AppInner() {
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />}
+          {/* 輪播模式左欄空著：AI 解析筆記放這裡，右側欄照樣可以改字幕 */}
+          {isCarousel && carousel.notesOpen && carousel.notes && (
+            <CarouselNotesPanel notes={carousel.notes} onClose={() => carousel.setNotesOpen(false)} />
+          )}
           <CanvasSection
             isDisabled={isDisabled}
             hasImage={!!store.image}
@@ -825,6 +835,7 @@ function AppInner() {
             <CarouselPanel
               carousel={carousel}
               scene={carouselScene}
+              image={store.image}
               videoPoints={store.points}
               activeCaptionIndex={activeCaptionIndex}
               onSetActiveCaptionIndex={setActiveCaptionIndex}

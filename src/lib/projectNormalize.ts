@@ -1,4 +1,4 @@
-import type { BackgroundSettings, ImageOverlay, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import type { BackgroundSettings, CarouselNotes, ImageOverlay, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { decodeAudioB64 } from '@/lib/audioCodec'
 import { clamp } from '@/lib/utils'
@@ -177,6 +177,21 @@ export function normalizeSubtitleCues(value: unknown, legacySegments: NarrationS
 }
 
 /** 背景設定：缺欄位就用給定預設（影片與輪播各自有不同預設） */
+export function normalizeSources(raw: unknown): CarouselNotes['sources'] {
+  return (Array.isArray(raw) ? raw : []).map(item => {
+    const source = (item ?? {}) as Record<string, unknown>
+    return { name: String(source.name ?? '').trim(), url: String(source.url ?? '').trim(), note: String(source.note ?? '').trim() }
+  }).filter(source => source.name)
+}
+
+/** 沒有任何內容就回傳 null，面板與存檔都當作「沒有筆記」 */
+export function normalizeCarouselNotes(raw: unknown): CarouselNotes | null {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const text = (v: unknown) => typeof v === 'string' ? v.trim() : ''
+  const notes = { plan: text(r.plan), research: text(r.research), sources: normalizeSources(r.sources) }
+  return notes.plan || notes.research || notes.sources.length ? notes : null
+}
+
 export function normalizeBackground(raw: unknown, fallback: BackgroundSettings): BackgroundSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<BackgroundSettings>
   return {

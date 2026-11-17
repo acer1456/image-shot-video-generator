@@ -46,6 +46,8 @@ export interface FrameState {
   subtitle: { text: string; style?: SubtitleStyle } | null
   /** 輪播封面／封底：整張畫作加框，忽略 camera */
   card?: CarouselCard
+  /** 輪播每張底部的來源署名（IG 名稱） */
+  credit?: string
 }
 
 /**
@@ -72,6 +74,7 @@ export type Layer =
   | { kind: 'overlay'; overlay: ImageOverlay; rect: Rect; opacity: number }
   | { kind: 'caption'; captionIndex: number; cap: CaptionData; layout: CaptionLayout }
   | { kind: 'subtitle'; style: SubtitleStyle | undefined; layout: SubtitleLayout }
+  | { kind: 'credit'; text: string; font: string; x: number; y: number }
 
 /** 旁白字幕的量測結果：行、位置、字型都算好，背景條算好或為 null。 */
 export interface SubtitleLayout {
@@ -147,6 +150,23 @@ export function getCameraSourceRect(
   const sx = p.x * image.width - sw / 2
   const sy = p.y * image.height - sh / 2
   return { sx, sy, sw, sh }
+}
+
+/**
+ * getCameraSourceRect 的反函式：給一個原圖上的框（0–1 正規化），算出剛好框得住它的取景。
+ * AI 標細節位置用框比猜 zoom 準；margin 留一點邊，框不會貼齊畫面邊緣。
+ */
+export function boxToPoint(
+  image: { width: number; height: number },
+  box: { left: number; top: number; right: number; bottom: number },
+  outputRatio: number = OUTPUT_RATIO,
+  margin = 1.15,
+) {
+  const l = clamp(Math.min(box.left, box.right), 0, 1), r = clamp(Math.max(box.left, box.right), 0, 1)
+  const t = clamp(Math.min(box.top, box.bottom), 0, 1), b = clamp(Math.max(box.top, box.bottom), 0, 1)
+  const base = getCameraSourceRect(image, { x: 0.5, y: 0.5, zoom: 1 } as CameraPoint, outputRatio)
+  const zoom = Math.min(base.sw / ((r - l) * image.width), base.sh / ((b - t) * image.height)) / margin
+  return { x: (l + r) / 2, y: (t + b) / 2, zoom: clamp(zoom, 1, 15) }
 }
 
 export function imageToCanvasPoint(
@@ -297,6 +317,17 @@ function overlayLayer(overlay: ImageOverlay, target: Target): Extract<Layer, { k
  * 一格畫面 = 一串 layer。純函式：只讀 state 與 target，不碰 canvas、不碰 React。
  * 陣列順序就是繪製順序。
  */
+/** 底部置中的小字署名；y 是文字底緣，留在封底「下載 App」那行（y≈0.9）下方 */
+function creditLayer(text: string, target: Target): Extract<Layer, { kind: 'credit' }> {
+  return {
+    kind: 'credit',
+    text,
+    font: `600 ${Math.round(target.width * 0.022)}px ${DEFAULT_FONT}`,
+    x: target.width / 2,
+    y: target.height - Math.round(target.width * 0.028),
+  }
+}
+
 export function layersFor(state: FrameState, target: Target): Layer[] {
   const { image, camera, mosaic } = state
   const layers: Layer[] = []
@@ -315,6 +346,7 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
     layers.push({ kind: 'frame', card: state.card, rect, phase: 'over' })
     for (const overlay of state.overlays) layers.push(overlayLayer(overlay, target))
     state.captions.forEach((cap, i) => layers.push({ kind: 'caption', captionIndex: i, cap, layout: captionLayout(target, cap) }))
+    if (state.credit) layers.push(creditLayer(state.credit, target))
     return layers
   }
 
@@ -351,6 +383,8 @@ export function layersFor(state: FrameState, target: Target): Layer[] {
       layout: captionLayout(target, cap),
     })
   })
+
+  if (state.credit) layers.push(creditLayer(state.credit, target))
 
   if (state.subtitle) {
     layers.push({
@@ -404,6 +438,17 @@ function paint(layers: Layer[], ctx: CanvasRenderingContext2D, onOverlayLoad?: (
       case 'subtitle':
         paintSubtitle(ctx, layer.layout, layer.style)
         break
+      case 'credit':
+        ctx.save()
+        ctx.font = layer.font
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'
+        ctx.shadowBlur = 8
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+        ctx.fillText(layer.text, layer.x, layer.y)
+        ctx.restore()
+        break
     }
   }
 }
@@ -429,6 +474,8 @@ export interface Scene {
   showCameraCaptions: boolean
   /** 音訊結束時間（秒）。影片不能比旁白短，所以它參與長度計算。 */
   audioEnd: number
+  /** 輪播每張底部的 IG 名稱；空字串或沒有＝不顯示（影片不用） */
+  credit?: string
 }
 
 /**
@@ -485,6 +532,7 @@ export function frameStateAt(scene: Scene, t: number): FrameState | null {
     mosaic: scene.mosaic,
     subtitle: text ? { text, style: cue?.style } : null,
     card: timeline.captionPoint.card,
+    credit: scene.credit?.trim() || undefined,
   }
 }
 
@@ -1005,6 +1053,6 @@ export function drawPointThumbnail(canvas: HTMLCanvasElement, scene: Scene, poin
   // 縮圖只呈現鏡頭取景，所以拿掉字幕、旁白與疊加圖——但馬賽克留著，
   // 它是「圖片內容」而不是疊加物。之前縮圖只傳 17 個參數中的 9 個，
   // 馬賽克就這樣被預設值悄悄關掉了。
-  const bare: Scene = { ...scene, cues: [], overlays: [], showCameraCaptions: false }
+  const bare: Scene = { ...scene, cues: [], overlays: [], showCameraCaptions: false, credit: undefined }
   composeFrame(bare, timeOfPoint(bare.points, pointIndex), ctx)
 }
