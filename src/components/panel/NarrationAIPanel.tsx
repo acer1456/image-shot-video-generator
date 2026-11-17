@@ -12,12 +12,32 @@ const LS_KEY_KEY = 'openrouter_api_key'
 const LS_KEY_MODEL = 'openrouter_model'
 const LS_KEY_MODEL_NAME = 'openrouter_model_name'
 
+const STORY_PAIR = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['en', 'zh'],
+  properties: { en: { type: 'string' }, zh: { type: 'string' } },
+}
+
+// sourceNotes 放最前面：讓模型先整理研究結果再寫稿
 const STORY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['narrationInputText'],
+  required: ['sourceNotes', 'lines', 'altHook', 'altEnding', 'sources'],
   properties: {
-    narrationInputText: { type: 'string' },
+    sourceNotes: { type: 'string' },
+    lines: { type: 'array', items: STORY_PAIR },
+    altHook: STORY_PAIR,
+    altEnding: STORY_PAIR,
+    sources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'url', 'note'],
+        properties: { name: { type: 'string' }, url: { type: 'string' }, note: { type: 'string' } },
+      },
+    },
   },
 }
 
@@ -52,34 +72,58 @@ function buildCameraSchema(subtitleCues: SubtitleCue[]) {
 }
 }
 
-const DEFAULT_SCRIPT_PROMPT = `You are a scriptwriter who specializes in Instagram Reels voiceover scripts for art analysis.
+export const DEFAULT_SCRIPT_PROMPT = `請先上網研究以下畫作，再撰寫 Instagram Reels 旁白字幕。
 
-Based on the artwork information I provide, write a voiceover script suitable for a {{MIN_SECONDS}}-{{MAX_SECONDS}} second Instagram Reel.
-The style should feel like "a quiet story with hidden tension," not an academic lecture.
+畫作資訊：
+{{ARTWORK_INFO}}
+（另附畫作圖片。資訊不完整時，請依圖片與研究結果判斷；無法確認就不要虛構。）
 
-First, search online for the painting's introduction, historical background, museum information, and other reviews or interpretations.
-Use them as reference, but do not overload the final script with facts.
-Do not invent unsupported stories about the painting.
+資料要求：
+至少參考 5 個可信來源，並包含至少 1 個官方或權威來源，例如博物館、拍賣行、學術機構或藝術資料庫。其餘可參考藝術評論、專欄、部落格或藝術史網站。
+若不同來源對年份、名稱、收藏地或畫作解讀有差異，請在 sourceNotes 簡短說明，不要武斷下結論。
+不得虛構人物心理、事件或隱藏故事。屬於推測的內容，請使用「可能」「可理解為」「常被視為」等保守語氣（英文用 maybe、may、is often seen as）。
+旁白提到的畫面細節，必須是圖片中真的看得到的。
 
-Please follow this style:
-1. The opening must be compelling and make people want to keep watching.
-2. Sentences should be short and subtitle-friendly.
-3. Avoid sounding too academic. Make it feel visual and story-like.
-4. Describe the figures, gestures, expressions, positions, and symbolic details in the painting.
-5. Give the script a clear narrative structure: beginning, development, turn, ending.
-6. You may describe emotion, conflict, and a sense of fate, but do not fabricate a story without support.
-7. If the painting includes saints, donors, mythological figures, historical figures, or symbols, verify them and include them clearly when relevant.
-8. If something is uncertain, use careful language such as "possibly," "believed to be," or "the painting makes us feel."
-9. The overall tone should be story-driven, quiet, mysterious, and slightly reverent.
-10. Avoid heavy art-historical jargon.
+請將研究結果寫成一段 {{MIN_SECONDS}}–{{MAX_SECONDS}} 秒內可講完的短影音旁白。
 
-Return only JSON:
-{ "narrationInputText": "English voiceover script only." }`
+旁白結構：
+以一句極短、帶疑問感的 hook 開場，讓人想知道「為什麼」，但不要獵奇或誇大。
+接著用非常口語、簡單的方式介紹畫中場景、人物與背景，再說明畫家為何選擇這個主題，以及它在當時社會、文化或藝術市場中的意義。
+自然帶入畫面細節，包括人物位置、空間、光線、顏色、視線、姿態與重要物件。不要只描述看見什麼，要說明這些細節如何支撐畫作主題。
+最後用一句留有思考空間的話收尾，讓觀眾願意停留或重看。不給答案，也不說教。
+
+語氣要求：
+像一位懂藝術史、但說話很日常的老師。小學生也能聽懂。句子短、清楚、有畫面感，不要像論文，也不要堆砌術語。
+用心理學角度來製作旁白故事：說出畫中人物此刻可能的處境、渴望或掙扎，讓人可以帶入角色去體會意涵。這些內容同樣要有根據，或明確標示為推測。
+避免空泛語句，例如「很有張力」「引人深思」。請具體說明張力來自哪個動作、視線、距離或構圖。
+文字要自然、有節奏，避免「首先、其次、最後、總之」等制式連接詞。可加入少量口語轉折，例如「說起來」「其實」「或許」，也可穿插一兩句反問，讓旁白更像真人說話。
+
+輸出格式（只回傳 JSON，欄位如下）：
+- sourceNotes：來源之間的差異說明；沒有差異就寫「各來源一致」。
+- lines：旁白正文，共 {{MIN_LINES}}–{{MAX_LINES}} 句，每句一個 { "en", "zh" }：
+  - en：一句英文，盡量不超過 12 個單字。這行會被語音朗讀，不可包含任何中文字（中文人名、地名請用英文拼寫）。
+  - zh：緊接的繁體中文翻譯，自然口語的台灣用語，不要生硬直譯。只當字幕顯示，不會被唸出。
+  - 例：{ "en": "Why is everyone waiting for the answer?", "zh": "為什麼大家都在等一個答案？" }
+- altHook：一句備用 hook，英文與繁體中文對照 { "en", "zh" }。
+- altEnding：一句更有力的結尾，英文與繁體中文對照 { "en", "zh" }。
+- sources：參考來源列表，每項 { "name", "url", "note" }：來源名稱、網址（沒有就留空字串）、該來源的重點，簡短即可。
+
+請直接輸出完成稿，不要解釋修改過程。`
 
 export type NarrationAIMode = 'story' | 'camera'
 
 export interface NarrationAIStoryResult {
   narrationInputText: string
+}
+
+interface StoryPair { en: string; zh: string }
+
+// 正文以外的附帶資訊，只顯示在面板裡給使用者參考，不進旁白
+export interface StoryExtras {
+  sourceNotes: string
+  altHook: StoryPair
+  altEnding: StoryPair
+  sources: Array<{ name: string; url: string; note: string }>
 }
 
 export interface NarrationAICameraResult {
@@ -142,9 +186,27 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min))
 }
 
-function normalizeStoryResult(raw: unknown): NarrationAIStoryResult {
-  const data = raw as Partial<NarrationAIStoryResult>
-  return { narrationInputText: String(data.narrationInputText ?? '').trim() }
+function normalizePair(raw: unknown): StoryPair {
+  const pair = (raw ?? {}) as Partial<StoryPair>
+  return { en: String(pair.en ?? '').trim(), zh: String(pair.zh ?? '').trim() }
+}
+
+// 每句英文後緊接一行中文：正是旁白欄的中英交錯格式，parseNarrationInput 會把中文掛到該句字幕
+function normalizeStoryResult(raw: unknown): { narrationInputText: string; extras: StoryExtras } {
+  const data = (raw ?? {}) as Record<string, unknown>
+  const lines = (Array.isArray(data.lines) ? data.lines : []).map(normalizePair).filter(line => line.en)
+  return {
+    narrationInputText: lines.map(line => (line.zh ? `${line.en}\n${line.zh}` : line.en)).join('\n'),
+    extras: {
+      sourceNotes: String(data.sourceNotes ?? '').trim(),
+      altHook: normalizePair(data.altHook),
+      altEnding: normalizePair(data.altEnding),
+      sources: (Array.isArray(data.sources) ? data.sources : []).map(item => {
+        const source = (item ?? {}) as Record<string, unknown>
+        return { name: String(source.name ?? '').trim(), url: String(source.url ?? '').trim(), note: String(source.note ?? '').trim() }
+      }).filter(source => source.name),
+    },
+  }
 }
 
 function getCueSpanDuration(cues: SubtitleCue[], index: number, narrationDuration: number) {
@@ -233,21 +295,33 @@ function validateCameraCoverage(raw: CameraBeatResponse, subtitleCues: SubtitleC
   }
 }
 
-function buildStoryInstruction(
-  info: { title: string; artist: string; year: string; location: string },
-  minSeconds: number,
-  maxSeconds: number,
-) {
-  const prompt = DEFAULT_SCRIPT_PROMPT
+export interface StoryArtwork {
+  title: string
+  artist: string
+  year: string
+  location: string
+  visualDescription?: string
+  theme?: string
+}
+
+function buildStoryInstruction(info: StoryArtwork, minSeconds: number, maxSeconds: number, basePrompt = DEFAULT_SCRIPT_PROMPT) {
+  // ponytail: 句數照原提示詞「20–40 秒 12–18 句」的比例換算，秒數改了句數跟著縮放
+  const minLines = Math.max(4, Math.round(minSeconds * 0.6))
+  const maxLines = Math.max(minLines, Math.round(maxSeconds * 0.45))
+  const artwork = [
+    `🖼️ ${info.title || '（未提供）'}`,
+    `🪄 ${info.artist || '（未提供）'}`,
+    `📅 ${info.year || '（未提供）'}`,
+    `📍 ${info.location || '（未提供）'}`,
+  ].join('｜')
+    + (info.visualDescription ? `\n畫面描述：${info.visualDescription}` : '')
+    + (info.theme ? `\n想強調的主題：${info.theme}` : '')
+  return basePrompt
+    .replace('{{ARTWORK_INFO}}', artwork)
     .replace('{{MIN_SECONDS}}', String(minSeconds))
     .replace('{{MAX_SECONDS}}', String(maxSeconds))
-  return `${prompt}
-
-Artwork information:
-Title: ${info.title || '(unknown)'}
-Artist: ${info.artist || '(unknown)'}
-Year: ${info.year || '(unknown)'}
-Current location: ${info.location || '(unknown)'}`
+    .replace('{{MIN_LINES}}', String(minLines))
+    .replace('{{MAX_LINES}}', String(maxLines))
 }
 
 function buildCameraInstruction(subtitleCues: SubtitleCue[], templateId?: string) {
@@ -313,6 +387,7 @@ async function requestStructuredJson(params: {
   schema: Record<string, unknown>
   schemaName: string
   maxTokens: number
+  webSearch?: boolean
 }) {
   let response: Response
   try {
@@ -328,6 +403,8 @@ async function requestStructuredJson(params: {
     body: JSON.stringify({
       model: params.model,
       provider: { require_parameters: true },
+      // OpenRouter 聯網搜尋（另計少量搜尋費用）：旁白要求先查證多個來源，不開會讓模型憑記憶編來源
+      ...(params.webSearch ? { plugins: [{ id: 'web', max_results: 8 }] } : {}),
       messages: [{
         role: 'user',
         content: [
@@ -366,6 +443,102 @@ async function requestStructuredJson(params: {
   return parseAiJsonObject<unknown>(raw, 'AI 回傳的 JSON 無法解析')
 }
 
+// 研究提示詞 → 中英旁白（左側旁白欄與工具列 AI 共用）
+export async function generateStory(params: {
+  apiKey: string
+  model: string
+  image: HTMLImageElement
+  info: StoryArtwork
+  minSeconds: number
+  maxSeconds: number
+  basePrompt?: string
+}): Promise<{ narrationInputText: string; extras: StoryExtras }> {
+  const parsed = await requestStructuredJson({
+    apiKey: params.apiKey,
+    model: params.model,
+    image: params.image,
+    prompt: buildStoryInstruction(params.info, params.minSeconds, params.maxSeconds, params.basePrompt),
+    schema: STORY_SCHEMA,
+    schemaName: 'narration_story',
+    maxTokens: 8000,
+    webSearch: true,
+  })
+  const result = normalizeStoryResult(parsed)
+  if (!result.narrationInputText) throw new Error('AI 回傳資料不完整，缺少旁白')
+  return result
+}
+
+// 依字幕時間軸配鏡頭（AI 配鏡頭與工具列 AI 共用）；驗證不過會帶著錯誤訊息重試一次
+export async function generateCameraForCues(params: {
+  apiKey: string
+  model: string
+  image: HTMLImageElement
+  cues: SubtitleCue[]
+  narrationDuration: number
+  templateId?: string
+}): Promise<NarrationAICameraResult> {
+  const { cues, templateId } = params
+  let lastError = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const parsed = await requestStructuredJson({
+        apiKey: params.apiKey,
+        model: params.model,
+        image: params.image,
+        prompt: `${buildCameraInstruction(cues, templateId)}${lastError ? `\n\nPrevious output failed validation: ${lastError}\nReturn the complete structured JSON again and correct the camera pacing according to that validation error.` : ''}`,
+        schema: buildCameraSchema(cues),
+        schemaName: 'narration_camera_beats',
+        maxTokens: 8000,
+      })
+      validateCameraCoverage(parsed as CameraBeatResponse, cues)
+      const result = normalizeCameraResult(parsed as CameraBeatResponse, cues, params.narrationDuration)
+      if (!result.points.length) throw new Error('AI 回傳資料不完整，缺少鏡頭')
+      // 選了模板時節奏由模板定義，不用通用的鏡頭變化頻率驗證
+      if (!templateId) validateCameraMotion(result)
+      return result
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : '格式驗證失敗'
+    }
+  }
+  throw new Error(lastError || 'AI 配鏡頭失敗，請換支援結構化輸出的模型後再試一次')
+}
+
+export function StoryExtrasView({ extras }: { extras: StoryExtras }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed flex flex-col gap-3 select-text">
+      {([['備用 Hook', extras.altHook], ['更有力的結尾', extras.altEnding]] as const).map(([label, pair]) => pair.en && (
+        <div key={label}>
+          <p className="font-medium mb-0.5">{label}</p>
+          <p>{pair.en}</p>
+          <p className="text-muted-foreground">{pair.zh}</p>
+        </div>
+      ))}
+      {extras.sourceNotes && (
+        <div>
+          <p className="font-medium mb-0.5">來源差異</p>
+          <p className="text-muted-foreground">{extras.sourceNotes}</p>
+        </div>
+      )}
+      {extras.sources.length > 0 && (
+        <div>
+          <p className="font-medium mb-0.5">參考來源</p>
+          <ul className="flex flex-col gap-1">
+            {extras.sources.map((source, i) => (
+              <li key={i}>
+                {/* 網址來自模型輸出，只接受 http(s) 才做成連結 */}
+                {/^https?:\/\//i.test(source.url)
+                  ? <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">{source.name}</a>
+                  : source.name}
+                {source.note && <span className="text-muted-foreground">：{source.note}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function NarrationAIPanel({
   mode, image, subtitleCues = [], narrationDuration = 0, onApplyStory, onApplyCamera, onClose,
 }: NarrationAIPanelProps) {
@@ -376,12 +549,13 @@ export function NarrationAIPanel({
   const [artist, setArtist] = useState('')
   const [year, setYear] = useState('')
   const [location, setLocation] = useState('')
-  const [minSeconds, setMinSeconds] = useState('40')
-  const [maxSeconds, setMaxSeconds] = useState('60')
+  const [minSeconds, setMinSeconds] = useState('20')
+  const [maxSeconds, setMaxSeconds] = useState('40')
   const [cameraTemplateId, setCameraTemplateId] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [isLeaving, setIsLeaving] = useState(false)
+  const [extras, setExtras] = useState<StoryExtras | null>(null)
 
   useEffect(() => { if (apiKey) localStorage.setItem(LS_KEY_KEY, apiKey) }, [apiKey])
   useEffect(() => { if (model) localStorage.setItem(LS_KEY_MODEL, model) }, [model])
@@ -414,49 +588,17 @@ export function NarrationAIPanel({
     setStatus('loading')
     setErrorMsg('')
     try {
-      const isCameraMode = mode === 'camera'
-      if (isCameraMode) {
-        let result: NarrationAICameraResult | null = null
-        let lastError = ''
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const parsed = await requestStructuredJson({
-              apiKey,
-              model,
-              image,
-              prompt: `${buildCameraInstruction(subtitleCues, cameraTemplateId)}${lastError ? `\n\nPrevious output failed validation: ${lastError}\nReturn the complete structured JSON again and correct the camera pacing according to that validation error.` : ''}`,
-              schema: buildCameraSchema(subtitleCues),
-              schemaName: 'narration_camera_beats',
-              maxTokens: 8000,
-            })
-            validateCameraCoverage(parsed as CameraBeatResponse, subtitleCues)
-            const nextResult = normalizeCameraResult(parsed as CameraBeatResponse, subtitleCues, narrationDuration)
-            if (!nextResult.points.length) throw new Error('AI 回傳資料不完整，缺少鏡頭')
-            // 選了模板時節奏由模板定義，不用通用的鏡頭變化頻率驗證
-            if (!cameraTemplateId) validateCameraMotion(nextResult)
-            result = nextResult
-            break
-          } catch (error) {
-            lastError = error instanceof Error ? error.message : '格式驗證失敗'
-          }
-        }
-        if (!result) {
-          throw new Error(lastError || 'AI 配鏡頭失敗，請換支援結構化輸出的模型後再試一次')
-        }
-        onApplyCamera(result)
+      if (mode === 'camera') {
+        onApplyCamera(await generateCameraForCues({ apiKey, model, image, cues: subtitleCues, narrationDuration, templateId: cameraTemplateId }))
       } else {
-        const parsed = await requestStructuredJson({
-          apiKey,
-          model,
-          image,
-          prompt: buildStoryInstruction({ title, artist, year, location }, parsedMinSeconds, parsedMaxSeconds),
-          schema: STORY_SCHEMA,
-          schemaName: 'narration_story',
-          maxTokens: 5000,
+        const { narrationInputText, extras: storyExtras } = await generateStory({
+          apiKey, model, image, info: { title, artist, year, location }, minSeconds: parsedMinSeconds, maxSeconds: parsedMaxSeconds,
         })
-        const result = normalizeStoryResult(parsed)
-        if (!result.narrationInputText) throw new Error('AI 回傳資料不完整，缺少英文旁白')
-        onApplyStory(result)
+        onApplyStory({ narrationInputText })
+        // 旁白模式不自動關閉：留著備用 hook／結尾／來源給使用者看
+        setExtras(storyExtras)
+        setStatus('success')
+        return
       }
 
       setStatus('success')
@@ -475,7 +617,7 @@ export function NarrationAIPanel({
       <div className={`relative z-10 w-full max-w-xl mx-4 mb-4 sm:mb-0 rounded-2xl border border-border bg-card shadow-2xl ${isLeaving ? 'immersive-canvas-leave' : 'immersive-canvas-enter'}`}>
         <div className="flex items-center gap-2 px-5 pt-5 pb-4 border-b border-border rounded-t-2xl bg-card">
           <Sparkles className="h-5 w-5 text-primary" />
-          <h2 className="font-bold text-base flex-1">{isCameraMode ? 'AI 配鏡頭' : 'AI 產生英文旁白'}</h2>
+          <h2 className="font-bold text-base flex-1">{isCameraMode ? 'AI 配鏡頭' : 'AI 產生中英旁白'}</h2>
           <button onClick={handleClose} className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors">
             <X className="h-4 w-4" />
           </button>
@@ -568,7 +710,7 @@ export function NarrationAIPanel({
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             {isCameraMode
               ? '鏡頭時間會直接使用已生成字幕的真實 duration，因此不會再出現鏡頭比旁白先結束。'
-              : '此步驟只產生英文故事內容。產生後請先用 HeadTTS 生成旁白語音與字幕，再使用 AI 配鏡頭。'}
+              : 'AI 會先上網研究畫作（OpenRouter 聯網搜尋，另計少量費用），再寫中英交錯旁白：填入左側旁白欄，並在時間軸排上草稿字幕。用 HeadTTS 產生語音或上傳音訊後，字幕會換成真實時間，再使用 AI 配鏡頭。'}
           </p>
 
           {status === 'error' && (
@@ -580,14 +722,20 @@ export function NarrationAIPanel({
           {status === 'success' && (
             <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-2">
               <CheckCircle2 className="h-4 w-4" />
-              <span>{isCameraMode ? '已產生鏡頭，正在套用…' : '已產生英文旁白，正在套用…'}</span>
+              <span>{isCameraMode ? '已產生鏡頭，正在套用…' : '已填入旁白欄與時間軸字幕（草稿時間）'}</span>
             </div>
           )}
 
-          <Button className="w-full h-10" disabled={status === 'loading'} onClick={handleGenerate}>
-            {status === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {status === 'loading' ? '產生中…' : isCameraMode ? '產生鏡頭位置' : '產生英文旁白'}
-          </Button>
+          {extras && <StoryExtrasView extras={extras} />}
+
+          {extras ? (
+            <Button className="w-full h-10" onClick={handleClose}>完成</Button>
+          ) : (
+            <Button className="w-full h-10" disabled={status === 'loading'} onClick={handleGenerate}>
+              {status === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {status === 'loading' ? '產生中…' : isCameraMode ? '產生鏡頭位置' : '產生中英旁白'}
+            </Button>
+          )}
         </div>
       </div>
     </div>

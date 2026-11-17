@@ -23,7 +23,6 @@ import type { CameraPoint, CaptionData, DragState, EditorMode, ImageOverlay, Mos
 import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import { composeFrame, drawChrome, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
-import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
   getNarrationDuration,
@@ -451,23 +450,13 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleAiGenerated = useCallback((result: AiGenerateResult) => {
-    const newPoints = result.points.map(p => {
-      const pt = normalizePoint({
-        x: p.x, y: p.y, zoom: p.zoom,
-        move: p.move, moveDuration: p.moveDuration, holdDuration: p.holdDuration,
-      })
-      pt.caption.text     = p.caption.text
-      pt.caption.subtitle  = p.caption.subtitle
-      if (p.caption.captionX != null) pt.caption.x = Math.max(0, Math.min(1, p.caption.captionX))
-      if (p.caption.captionY != null) pt.caption.y = Math.max(0, Math.min(1, p.caption.captionY))
-      return pt
-    })
-    store.setPoints(newPoints)
-    store.setActiveIndex(0)
-    store.setActiveTab('camera')
-    triggerRedraw()
-  }, [store, triggerRedraw])
+  // 工具列 AI：中英旁白填入左側旁白欄＋時間軸草稿字幕（不放鏡頭字幕）；鏡頭另由 handleNarrationAiCameraApply 套用
+  const handleAiNarration = useCallback((narrationText: string, cues: SubtitleCue[]) => {
+    setNarrationInputText(narrationText)
+    setSubtitleCues(cues)
+    setActiveSubtitleId(cues[0]?.id ?? null)
+    setIsNarrationCollapsed(false)
+  }, [])
 
   // 把旁白字幕卡片的 SubtitleStyle 對應轉成鏡頭字幕（CaptionData）欄位，套用到目前選取的鏡頭
   const handleApplySubtitleStyleToCameraCaption = useCallback((style: SubtitleStyle) => {
@@ -950,7 +939,8 @@ function AppInner() {
       {isAiPanelOpen && (
         <AiGeneratePanel
           image={store.image}
-          onGenerated={handleAiGenerated}
+          onNarration={handleAiNarration}
+          onCamera={handleNarrationAiCameraApply}
           onClose={() => setIsAiPanelOpen(false)}
         />
       )}

@@ -17,7 +17,7 @@ import {
   type NarrationAIMode,
   type NarrationAIStoryResult,
 } from '@/components/panel/NarrationAIPanel'
-import { applyNarrationLineTranslations, buildAudioOnlyNarration, buildUploadedNarration, createNarrationMixdown, getNarrationDuration, parseNarrationInput, shiftSubtitleCues } from '@/lib/narration'
+import { applyNarrationLineTranslations, buildAudioOnlyNarration, buildDraftSubtitleCues, buildUploadedNarration, createNarrationMixdown, getNarrationDuration, isDraftCue, parseNarrationInput, shiftSubtitleCues } from '@/lib/narration'
 import { decodeAudioFile } from '@/lib/audioCodec'
 import { getCtcEmissions } from '@/lib/asr'
 
@@ -125,6 +125,10 @@ export function NarrationSidebar({
   const [pauseIntensity, setPauseIntensity] = useState(clampPauseIntensity(track?.pauseIntensity ?? 1))
   const [playing, setPlaying] = useState(false)
   const [showPrompt, setShowPrompt] = useState(() => !inputText.trim())
+  // 時間軸上是 AI 草稿字幕（工具列或旁白欄 AI 剛產生、還沒配語音）→ 打開文字框讓使用者看到旁白稿
+  useEffect(() => {
+    if (subtitleCues.length && subtitleCues.every(isDraftCue)) setShowPrompt(true)
+  }, [subtitleCues])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState('')
   const [subtitleOffset, setSubtitleOffset] = useState(0)
@@ -179,12 +183,10 @@ export function NarrationSidebar({
     const trimmed = inputText.trim()
     if (!trimmed || isGenerating) return
     releasePlaybackAudio()
-    const shouldCreateSubtitles = subtitleCues.length === 0
+    // 沒字幕或只有 AI 草稿字幕 → 用語音的真實時間重建；草稿留到成功才換掉，失敗不會不見
+    const shouldCreateSubtitles = subtitleCues.every(isDraftCue)
     onTrackChange(null)
-    if (shouldCreateSubtitles) {
-      onSubtitleCuesChange([])
-      onActiveSubtitleIdChange(null)
-    }
+    if (shouldCreateSubtitles) onActiveSubtitleIdChange(null)
     try {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
       const { ttsText, lines } = parseNarrationInput(trimmed)
@@ -199,7 +201,7 @@ export function NarrationSidebar({
     } catch {
       // useheadTTS owns the visible status text.
     }
-  }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, pauseIntensity, releasePlaybackAudio, speed, subtitleCues.length, voice])
+  }, [generate, inputText, isGenerating, onActiveSubtitleIdChange, onSubtitleCuesChange, onTrackChange, pauseIntensity, releasePlaybackAudio, speed, subtitleCues, voice])
 
   const handleUploadAudio = useCallback(async (file: File) => {
     const trimmed = inputText.trim()
@@ -219,8 +221,8 @@ export function NarrationSidebar({
       return
     }
     try {
-      // 已有字幕：只放入音訊，不辨識、不動現有字幕
-      if (subtitleCues.length > 0) {
+      // 已有字幕：只放入音訊，不辨識、不動現有字幕（AI 草稿字幕不算，照樣對齊換成真實時間）
+      if (subtitleCues.some(cue => !isDraftCue(cue))) {
         setUploadStatus('載入音訊…')
         onTrackChange(buildAudioOnlyNarration(trimmed, audioData, sampleRate, subtitleCues))
         setShowPrompt(false)
@@ -442,7 +444,7 @@ export function NarrationSidebar({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setAiPanelMode('story')}
-            title="AI 產生英文旁白"
+            title="AI 產生中英旁白"
             className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-muted transition-colors text-primary disabled:opacity-40 disabled:cursor-not-allowed"
             disabled={!image}
           >
@@ -479,6 +481,9 @@ export function NarrationSidebar({
           narrationDuration={track?.duration ?? 0}
           onApplyStory={result => {
             onApplyAiStory(result)
+            const cues = buildDraftSubtitleCues(result.narrationInputText)
+            onSubtitleCuesChange(cues)
+            onActiveSubtitleIdChange(cues[0]?.id ?? null)
             setShowPrompt(true)
           }}
           onApplyCamera={onApplyAiCamera}

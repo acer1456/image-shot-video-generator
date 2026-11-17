@@ -7,61 +7,61 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelCombobox } from '@/components/ModelCombobox'
 import {
-  generateWithAi, SYSTEM_PROMPT,
-  type AiGenerateResult, type PaintingInfo,
-} from '@/lib/openrouter'
+  DEFAULT_SCRIPT_PROMPT, StoryExtrasView, generateCameraForCues, generateStory,
+  type NarrationAICameraResult, type StoryExtras,
+} from '@/components/panel/NarrationAIPanel'
+import { buildDraftSubtitleCues } from '@/lib/narration'
+import type { SubtitleCue } from '@/types'
 import { Sparkles, X, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, FileText, RotateCcw } from 'lucide-react'
 
 const LS_KEY_KEY        = 'openrouter_api_key'
 const LS_KEY_MODEL      = 'openrouter_model'
 const LS_KEY_MODEL_NAME = 'openrouter_model_name'
-const LS_KEY_CUSTOM_PROMPT = 'openrouter_custom_prompt'
+// v3：預設 Prompt 改為研究提示詞（與左側旁白欄共用）；舊 key 存的是舊版分鏡 Prompt 全文，沿用會蓋掉新預設
+const LS_KEY_CUSTOM_PROMPT = 'openrouter_custom_prompt_v3'
+// ponytail: 工具列沒有秒數欄位，固定用研究提示詞的 20–40 秒；要可調再加欄位
+const STORY_MIN_SECONDS = 20
+const STORY_MAX_SECONDS = 40
 
 const VISUAL_DESC_OPTS: { value: string; label: string }[] = [
   { value: '人物肖像為主，面部表情、眼神與手勢細節突出，背景簡潔', label: '人物肖像' },
   { value: '宗教場景，天使、聖人、神聖光芒，充滿符號與神學象徵', label: '宗教神聖' },
-  { value: '明暗對比強烈，強光從單一方向打入，背景深暗，卡拉瓦喬式戟劇性光影', label: '戟劇光影' },
+  { value: '明暗對比強烈，強光從單一方向打入，背景深暗，卡拉瓦喬式戲劇性光影', label: '戲劇光影' },
   { value: '多人群像構圖，歷史或神話場景，人物動態豐富，空間層次感強', label: '歷史群像' },
   { value: '室內場景，日常生活細節豐富，物件象徵意涵濃厚', label: '室內日常' },
-  { value: '自然風景為主，天空、光線與大氣效果細腥，人物為輔或缺席', label: '自然風景' },
-  { value: '神話傳說場景，神祘、怪物或傳說人物，充滿寓意與象徵', label: '神話傳說' },
+  { value: '自然風景為主，天空、光線與大氣效果細膩，人物為輔或缺席', label: '自然風景' },
+  { value: '神話傳說場景，神祇、怪物或傳說人物，充滿寓意與象徵', label: '神話傳說' },
   { value: '戰爭、衝突或英雄場景，動態張力強，情緒激烈', label: '戰爭衝突' },
   { value: '__custom__', label: '自訂描述…' },
 ]
 
 const THEME_OPTS = [
-  '信仰與神聖', '背叛與謊言', '孤獨與疏離', '犊牲與痛苦',
+  '信仰與神聖', '背叛與謊言', '孤獨與疏離', '犧牲與痛苦',
   '愛與渴望', '死亡與命運', '榮耀與尊嚴', '母愛與守護',
-  '恐懼與劉傷', '救贎與希望', '權力與控制', '自由與束縛',
+  '恐懼與創傷', '救贖與希望', '權力與控制', '自由與束縛',
 ]
 
 interface AiGeneratePanelProps {
   image: HTMLImageElement | null
-  onGenerated: (result: AiGenerateResult) => void
+  // 旁白先套用（含時間軸草稿字幕），配鏡頭失敗時研究好的旁白也不會丟
+  onNarration: (narrationText: string, cues: SubtitleCue[]) => void
+  onCamera: (result: NarrationAICameraResult) => void
   onClose: () => void
 }
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
 
-function imageToDataUrl(img: HTMLImageElement): string {
-  const canvas = document.createElement('canvas')
-  const MAX = 1024
-  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight))
-  canvas.width  = Math.round(img.naturalWidth  * scale)
-  canvas.height = Math.round(img.naturalHeight * scale)
-  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
-  return canvas.toDataURL('image/jpeg', 0.85)
-}
-
 // ── Main Panel ────────────────────────────────────────────────────────────────────────────
-export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGeneratePanelProps) {
+export default function AiGeneratePanel({ image, onNarration, onCamera, onClose }: AiGeneratePanelProps) {
   const [apiKey, setApiKey]       = useState(() => localStorage.getItem(LS_KEY_KEY)       ?? '')
   const [model, setModel]         = useState(() => localStorage.getItem(LS_KEY_MODEL)     ?? '')
   const [modelName, setModelName] = useState(() => localStorage.getItem(LS_KEY_MODEL_NAME) ?? '')
-  const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem(LS_KEY_CUSTOM_PROMPT) ?? SYSTEM_PROMPT)
+  const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem(LS_KEY_CUSTOM_PROMPT) ?? DEFAULT_SCRIPT_PROMPT)
   const [showKey, setShowKey]     = useState(false)
   const [status, setStatus]       = useState<Status>('idle')
   const [errorMsg, setErrorMsg]   = useState('')
+  const [loadingText, setLoadingText] = useState('')
+  const [extras, setExtras]       = useState<StoryExtras | null>(null)
   const [isLeaving, setIsLeaving] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
   const [unknownPainting, setUnknownPainting] = useState(false)
@@ -89,28 +89,32 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
     if (!image)         { setErrorMsg('請先上傳圖片');                   setStatus('error'); return }
     setStatus('loading')
     setErrorMsg('')
+    const info = unknownPainting ? { title: '', artist: '', year: '', location: '' } : {
+      title: paintTitle,
+      artist: paintArtist,
+      year: paintYear,
+      location: paintCollection,
+      visualDescription: paintVisualSel === '__custom__' ? paintVisualCustom : paintVisualSel,
+      theme: paintTheme,
+    }
+    let narrationApplied = false
     try {
-      const dataUrl = imageToDataUrl(image)
-      const info: PaintingInfo = unknownPainting ? {
-        title: '', year: '', artist: '', collection: '', visualDescription: '', theme: '',
-      } : {
-        title: paintTitle,
-        year: paintYear,
-        artist: paintArtist,
-        collection: paintCollection,
-        visualDescription: paintVisualSel === '__custom__' ? paintVisualCustom : paintVisualSel,
-        theme: paintTheme,
-      }
-      const result = await generateWithAi(
-        { apiKey: apiKey.trim(), model },
-        dataUrl,
-        info,
-        customPrompt !== SYSTEM_PROMPT ? customPrompt : undefined,
-      )
+      setLoadingText('上網研究畫作並撰寫中英旁白⋯')
+      const story = await generateStory({
+        apiKey: apiKey.trim(), model, image, info,
+        minSeconds: STORY_MIN_SECONDS, maxSeconds: STORY_MAX_SECONDS, basePrompt: customPrompt,
+      })
+      const cues = buildDraftSubtitleCues(story.narrationInputText)
+      onNarration(story.narrationInputText, cues)
+      narrationApplied = true
+      setExtras(story.extras)
+
+      setLoadingText('依旁白字幕配置鏡頭⋯')
+      onCamera(await generateCameraForCues({ apiKey: apiKey.trim(), model, image, cues, narrationDuration: 0 }))
       setStatus('success')
-      setTimeout(() => { onGenerated(result); handleClose() }, 800)
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : '未知錯誤')
+      const msg = e instanceof Error ? e.message : '未知錯誤'
+      setErrorMsg(narrationApplied ? `旁白已填入左側旁白欄，但配鏡頭失敗：${msg}（可在旁白欄用「AI 配鏡頭」重試）` : msg)
       setStatus('error')
     }
   }
@@ -141,7 +145,7 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
         </div>
 
         {/* Body */}
-        <div className="px-5 py-4 flex flex-col gap-4 rounded-b-2xl bg-card">
+        <div className="px-5 py-4 flex flex-col gap-4 rounded-b-2xl bg-card max-h-[78vh] overflow-y-auto">
           {/* Prompt preview */}
           {showPrompt && (
             <div className="rounded-xl border border-border bg-muted/40 overflow-hidden">
@@ -149,7 +153,7 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
                 <span className="text-xs font-medium text-muted-foreground">Prompt 編輯器（含佔位符）</span>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => { setCustomPrompt(SYSTEM_PROMPT); localStorage.setItem(LS_KEY_CUSTOM_PROMPT, SYSTEM_PROMPT) }}
+                    onClick={() => { setCustomPrompt(DEFAULT_SCRIPT_PROMPT); localStorage.removeItem(LS_KEY_CUSTOM_PROMPT) }}
                     title="重置為預設 Prompt"
                     className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground">
                     <RotateCcw className="h-3 w-3" />
@@ -170,7 +174,7 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
           )}
 
           <p className="text-xs text-muted-foreground leading-relaxed">
-            上傳名畫後，AI 將自動分析畫作並產生鏡頭路徑與繁體中文介紹字幕。需要{' '}
+            AI 會先上網研究畫作（聯網搜尋另計少量費用），依研究提示詞寫出中英旁白，填入左側旁白欄與時間軸字幕，再依字幕配置鏡頭路徑。需要{' '}
             <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"
               className="text-primary underline underline-offset-2">OpenRouter API Key</a>。
           </p>
@@ -289,20 +293,27 @@ export default function AiGeneratePanel({ image, onGenerated, onClose }: AiGener
           {status === 'success' && (
             <div className="flex items-center gap-2 rounded-lg bg-green-500/10 border border-green-500/20 p-3 text-green-600 dark:text-green-400 text-xs">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>產生成功！正在套用內容⋯</span>
+              <span>已填入左側旁白欄、時間軸字幕（草稿時間）與鏡頭路徑</span>
             </div>
           )}
 
+          {/* 備用 hook／結尾／參考來源：成功後留在面板上，不自動關閉 */}
+          {extras && <StoryExtrasView extras={extras} />}
+
           {/* Generate button */}
-          <Button className="w-full h-10 text-sm font-semibold"
-            onClick={handleGenerate}
-            disabled={status === 'loading' || status === 'success' || !image}>
-            {status === 'loading' ? (
-              <><Loader2 className="h-4 w-4 animate-spin" />AI 分析中，請稍候⋯</>
-            ) : (
-              <><Sparkles className="h-4 w-4" />{image ? '自動產生鏡頭與字幕' : '請先上傳圖片'}</>
-            )}
-          </Button>
+          {status === 'success' ? (
+            <Button className="w-full h-10 text-sm font-semibold" onClick={handleClose}>完成</Button>
+          ) : (
+            <Button className="w-full h-10 text-sm font-semibold"
+              onClick={handleGenerate}
+              disabled={status === 'loading' || !image}>
+              {status === 'loading' ? (
+                <><Loader2 className="h-4 w-4 animate-spin" />{loadingText}</>
+              ) : (
+                <><Sparkles className="h-4 w-4" />{image ? '自動產生旁白與鏡頭' : '請先上傳圖片'}</>
+              )}
+            </Button>
+          )}
 
           {!image && (
             <p className="text-xs text-muted-foreground text-center -mt-2">上傳圖片後即可使用 AI 功能</p>
