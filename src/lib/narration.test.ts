@@ -2,7 +2,7 @@
 // ponytail: 只驗剪一刀這條純邏輯，音訊不進瀏覽器也能算
 import assert from 'node:assert'
 import test from 'node:test'
-import { splitNarrationAt } from './narration'
+import { buildDraftSubtitleCues, isDraftCue, parseNarrationInput, splitNarrationAt } from './narration'
 import type { NarrationTrack } from '@/types'
 
 const RATE = 100
@@ -52,4 +52,25 @@ test('切點之後的字改掛後半段，文字跟著重組', () => {
   assert.equal(tail.text, 'world')
   assert.equal(out.words[0].segmentId, head.id)
   assert.equal(out.words[1].segmentId, tail.id)
+})
+
+test('AI 中英旁白格式：每行英文配到正下方中文，中文不進 TTS，段落空行保留', () => {
+  const raw = 'She was told not to look back.\n有人警告她，千萬別回頭。\nShe looked.\n她還是回頭了。\n\nLook at her feet.\n看看她的腳。'
+  const { ttsText, lines } = parseNarrationInput(raw)
+  assert.equal(ttsText, 'She was told not to look back.\nShe looked.\n\nLook at her feet.')
+  assert.deepEqual(lines.map(l => [l.english, l.translation]), [
+    ['She was told not to look back.', '有人警告她，千萬別回頭。'],
+    ['She looked.', '她還是回頭了。'],
+    ['Look at her feet.', '看看她的腳。'],
+  ])
+})
+
+test('AI 旁白草稿字幕：中文掛回所屬英文行、時間遞增、全部標成草稿', () => {
+  const cues = buildDraftSubtitleCues('Why is everyone waiting for the answer?\n為什麼大家都在等一個答案？\nLook closer.\n再看仔細一點。')
+  assert.ok(cues.length >= 2)
+  assert.ok(cues.every(isDraftCue))
+  assert.equal(cues[0].translation, '為什麼大家都在等一個答案？')
+  assert.equal(cues[cues.length - 1].text, 'Look closer.')
+  assert.equal(cues[cues.length - 1].translation, '再看仔細一點。')
+  for (let i = 1; i < cues.length; i++) assert.ok(cues[i].startTime >= cues[i - 1].startTime + cues[i - 1].duration)
 })

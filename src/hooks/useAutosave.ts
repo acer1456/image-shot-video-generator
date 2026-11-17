@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { ActiveTab, BackgroundSettings, CameraPoint, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
+import type { ActiveTab, BackgroundSettings, CameraPoint, CarouselNotes, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
 import { DEFAULT_CAROUSEL_BACKGROUND } from '@/hooks/useCarouselSlides'
 import { clamp, normalizeProjectName } from '@/lib/utils'
 import { normalizeMosaicStrokes } from '@/lib/mosaic'
@@ -12,6 +12,7 @@ import {
   normalizeSubtitleCues,
   normalizeSubtitleStyle,
   normalizeBackground,
+  normalizeCarouselNotes,
 } from '@/lib/projectNormalize'
 
 const AUTOSAVE_KEY = 'artful_autosave'
@@ -90,6 +91,7 @@ interface UseAutosaveOptions {
   showMosaicInOutput?: boolean
   carouselSlides?: CameraPoint[]
   carouselBackground?: BackgroundSettings
+  carouselNotes?: CarouselNotes | null
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
@@ -99,6 +101,7 @@ interface UseAutosaveOptions {
   setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
   setCarouselSlides?: Dispatch<SetStateAction<CameraPoint[]>>
   setCarouselBackground?: Dispatch<SetStateAction<BackgroundSettings>>
+  setCarouselNotes?: Dispatch<SetStateAction<CarouselNotes | null>>
   triggerRedraw: () => void
 }
 
@@ -113,6 +116,7 @@ export function useAutosave({
   showMosaicInOutput,
   carouselSlides,
   carouselBackground,
+  carouselNotes,
   setNarrationInputText,
   setNarrationTrack,
   setSubtitleCues,
@@ -122,6 +126,7 @@ export function useAutosave({
   setShowMosaicInOutput,
   setCarouselSlides,
   setCarouselBackground,
+  setCarouselNotes,
   triggerRedraw,
 }: UseAutosaveOptions) {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -198,6 +203,7 @@ export function useAutosave({
           showMosaicInOutput: showMosaicInOutput ?? true,
           carouselSlides: carouselSlides ?? [],
           carouselBackground,
+          carouselNotes: carouselNotes ?? null,
         }
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data))
         if (narrationTrack) {
@@ -210,7 +216,7 @@ export function useAutosave({
       }
     }, 2000)
     return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current) }
-  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText, imageOverlays, overlaysLocked, mosaicStrokes, showMosaicInOutput, carouselSlides, carouselBackground])
+  }, [store.points, store.image, store.projectName, store.backgroundSettings, store.activeIndex, store.activeTab, narrationTrack, subtitleCues, narrationInputText, imageOverlays, overlaysLocked, mosaicStrokes, showMosaicInOutput, carouselSlides, carouselBackground, carouselNotes])
 
   const handleRestoreAutosave = useCallback(async () => {
     if (!pendingRestore) return
@@ -268,10 +274,11 @@ export function useAutosave({
     setCarouselSlides?.(Array.isArray(project.carouselSlides)
       ? (project.carouselSlides as Partial<CameraPoint>[]).map(normalizePoint) : [])
     setCarouselBackground?.(normalizeBackground(project.carouselBackground, DEFAULT_CAROUSEL_BACKGROUND))
+    setCarouselNotes?.(normalizeCarouselNotes(project.carouselNotes))
     setSubtitleCues(normalizeSubtitleCues(project.subtitleCues, legacySegments, legacyStyle))
     setPendingRestore(null)
     setShowRestoreModal(false)
-  }, [pendingRestore, store, triggerRedraw, setNarrationInputText, setNarrationTrack, setSubtitleCues, setMosaicStrokes, setShowMosaicInOutput, setCarouselSlides, setCarouselBackground])
+  }, [pendingRestore, store, triggerRedraw, setNarrationInputText, setNarrationTrack, setSubtitleCues, setMosaicStrokes, setShowMosaicInOutput, setCarouselSlides, setCarouselBackground, setCarouselNotes])
 
   const handleDiscardAutosave = useCallback(() => {
     localStorage.removeItem(AUTOSAVE_KEY)

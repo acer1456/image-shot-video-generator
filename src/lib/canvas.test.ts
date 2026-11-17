@@ -4,7 +4,7 @@
 // layersFor 是純函式，所以整份測試不需要瀏覽器、不需要 canvas、不需要假的 ctx——
 // 只要注入一個確定性的 measure。見 CONTEXT.md 的 Layer / Measure。
 import assert from 'node:assert'
-import { drawChrome, frameStateAt, layersAt, layersFor, sceneDuration, sourceLayersAt, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
+import { boxToPoint, drawChrome, frameStateAt, getCameraSourceRect, layersAt, layersFor, sceneDuration, sourceLayersAt, subtitleLayout, timeOfPoint, type FrameState, type Layer, type Scene, type Target } from './canvas'
 import type { CameraPoint, CaptionData, ImageOverlay, MosaicStroke, SubtitleCue, SubtitleStyle } from '@/types'
 
 // 每個字元固定 10px，跟字型無關 → 換行結果可預期
@@ -443,6 +443,35 @@ function scene(over: Partial<Scene> = {}): Scene {
   const { ctx, calls } = recordingCtx(1080, 1920)
   drawChrome(s, 1, ctx, { activeCaptionIndex: 0, captionBox: false, snapGuide: { x: false, y: false }, overlayGuides: true })
   assert.equal(calls.filter(c => c.name === 'strokeRect').length, 1, '疊加圖框線不該依賴鏡頭點')
+}
+
+// IG 署名：有才畫、畫在字幕之後、底部置中；封面／封底卡片也要有
+{
+  assert.ok(!kinds(layersFor(state(), target)).includes('credit'), '沒有署名就不畫')
+  const layers = layersFor(state({ captions: [caption({ text: 'A' })], credit: '@art' }), target)
+  assert.deepEqual(kinds(layers).slice(-2), ['caption', 'credit'], '署名在字幕之後')
+  const credit = layers[layers.length - 1] as Extract<Layer, { kind: 'credit' }>
+  assert.equal(credit.text, '@art')
+  assert.equal(credit.x, 540, '水平置中')
+  assert.equal(credit.y, 1920 - 30, '底緣離畫面底部 1080×0.028')
+  const card = layersFor(state({ credit: '@art', card: { kind: 'cover', frame: 'none', frameColor: '#ffffff', imageWidth: 0.8, imageY: 0.45 } }), target)
+  assert.equal(kinds(card)[card.length - 1], 'credit', '卡片也有署名')
+}
+
+// boxToPoint：換算出的 4:5 取景必須完整包住 AI 給的框，且框置中
+{
+  const image = { width: 4000, height: 3000 }
+  const box = { left: 0.4, top: 0.4, right: 0.6, bottom: 0.5 }
+  const p = boxToPoint(image, box, 0.8)
+  assert.ok(Math.abs(p.x - 0.5) < 1e-9 && Math.abs(p.y - 0.45) < 1e-9, '中心點是框的中心')
+  assert.ok(Math.abs(p.zoom - 5 / 1.15) < 1e-9, '寬度是限制邊：4000/800 再除以邊距')
+  const src = getCameraSourceRect(image, { ...p } as CameraPoint, 0.8)
+  assert.ok(src.sx <= 1600 && src.sx + src.sw >= 2400 && src.sy <= 1200 && src.sy + src.sh >= 1500, '取景包住整個框')
+
+  assert.equal(boxToPoint(image, { left: 0, top: 0, right: 1, bottom: 1 }, 0.8).zoom, 1, '整幅畫 → zoom 夾在 1')
+  assert.equal(boxToPoint(image, { left: 0.5, top: 0.5, right: 0.5, bottom: 0.5 }, 0.8).zoom, 15, '零面積框 → zoom 夾在 15')
+  const flipped = boxToPoint(image, { left: 0.6, top: 0.5, right: 0.4, bottom: 0.4 }, 0.8)
+  assert.deepEqual(flipped, p, '左右／上下顛倒也一樣')
 }
 
 console.log('canvas layers self-check passed')

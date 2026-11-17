@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { BackgroundSettings, CameraPoint, ActiveTab, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
-import { normalizeBackground } from '@/lib/projectNormalize'
+import type { BackgroundSettings, CameraPoint, ActiveTab, CarouselNotes, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
+import { normalizeBackground, normalizeCarouselNotes } from '@/lib/projectNormalize'
 import { normalizeMosaicStrokes } from '@/lib/mosaic'
 import { OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName, sanitizeFileName, getTodayString } from '@/lib/utils'
 import {
@@ -25,6 +25,7 @@ interface UseProjectIOOptions {
   showMosaicInOutput?: boolean
   carouselSlides?: CameraPoint[]
   carouselBackground?: BackgroundSettings
+  carouselNotes?: CarouselNotes | null
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
@@ -34,6 +35,7 @@ interface UseProjectIOOptions {
   setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
   setCarouselSlides?: Dispatch<SetStateAction<CameraPoint[]>>
   setCarouselBackground?: Dispatch<SetStateAction<BackgroundSettings>>
+  setCarouselNotes?: Dispatch<SetStateAction<CarouselNotes | null>>
 }
 
 export function useProjectIO(store: AppStore, triggerRedraw: () => void, options?: UseProjectIOOptions) {
@@ -116,6 +118,7 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
         showMosaicInOutput: options?.showMosaicInOutput ?? true,
         carouselSlides: options?.carouselSlides ?? [],
         carouselBackground: options?.carouselBackground,
+        carouselNotes: options?.carouselNotes ?? null,
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -155,6 +158,7 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
       options?.setShowMosaicInOutput?.(project.showMosaicInOutput !== false)
       options?.setCarouselSlides?.(Array.isArray(project.carouselSlides) ? project.carouselSlides.map(normalizePoint) : [])
       options?.setCarouselBackground?.(normalizeBackground(project.carouselBackground, DEFAULT_CAROUSEL_BACKGROUND))
+      options?.setCarouselNotes?.(normalizeCarouselNotes(project.carouselNotes))
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }

@@ -9,6 +9,7 @@ import { AppToolbar } from '@/components/panel/AppToolbar'
 import { CanvasSection } from '@/components/canvas/CanvasSection'
 import { EditorSidebar } from '@/components/panel/EditorSidebar'
 import { CarouselPanel } from '@/components/panel/CarouselPanel'
+import { CarouselNotesPanel } from '@/components/panel/CarouselNotesPanel'
 import { NarrationSidebar } from '@/components/panel/NarrationSidebar'
 import type { NarrationAICameraResult, NarrationAIStoryResult } from '@/components/panel/NarrationAIPanel'
 import { ImmersiveOverlay } from '@/components/ImmersiveOverlay'
@@ -23,7 +24,6 @@ import type { CameraPoint, CaptionData, DragState, EditorMode, ImageOverlay, Mos
 import { fileToOverlayDataUrl, getOverlayImage, pruneOverlayImageCache } from '@/lib/overlays'
 import { OUTPUT_W, clamp, normalizeProjectName, nextFrame } from '@/lib/utils'
 import { composeFrame, drawChrome, sceneDuration, timeOfPoint, type Scene } from '@/lib/canvas'
-import type { AiGenerateResult } from '@/lib/openrouter'
 import {
   getActiveSubtitleCue,
   getNarrationDuration,
@@ -109,6 +109,7 @@ function AppInner() {
     showMosaicInOutput,
     carouselSlides: carousel.slides,
     carouselBackground: carousel.background,
+    carouselNotes: carousel.notes,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -118,6 +119,7 @@ function AppInner() {
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
     setCarouselBackground: carousel.setBackground,
+    setCarouselNotes: carousel.setNotes,
   })
   const { showRestoreModal, pendingRestore, handleRestoreAutosave, handleDiscardAutosave } = useAutosave({
     store,
@@ -130,6 +132,7 @@ function AppInner() {
     showMosaicInOutput,
     carouselSlides: carousel.slides,
     carouselBackground: carousel.background,
+    carouselNotes: carousel.notes,
     setNarrationInputText,
     setNarrationTrack,
     setSubtitleCues,
@@ -139,6 +142,7 @@ function AppInner() {
     setShowMosaicInOutput,
     setCarouselSlides: carousel.setSlides,
     setCarouselBackground: carousel.setBackground,
+    setCarouselNotes: carousel.setNotes,
     triggerRedraw,
   })
 
@@ -451,23 +455,13 @@ function AppInner() {
     triggerRedraw()
   }, [store, triggerRedraw])
 
-  const handleAiGenerated = useCallback((result: AiGenerateResult) => {
-    const newPoints = result.points.map(p => {
-      const pt = normalizePoint({
-        x: p.x, y: p.y, zoom: p.zoom,
-        move: p.move, moveDuration: p.moveDuration, holdDuration: p.holdDuration,
-      })
-      pt.caption.text     = p.caption.text
-      pt.caption.subtitle  = p.caption.subtitle
-      if (p.caption.captionX != null) pt.caption.x = Math.max(0, Math.min(1, p.caption.captionX))
-      if (p.caption.captionY != null) pt.caption.y = Math.max(0, Math.min(1, p.caption.captionY))
-      return pt
-    })
-    store.setPoints(newPoints)
-    store.setActiveIndex(0)
-    store.setActiveTab('camera')
-    triggerRedraw()
-  }, [store, triggerRedraw])
+  // 工具列 AI：中英旁白填入左側旁白欄＋時間軸草稿字幕（不放鏡頭字幕）；鏡頭另由 handleNarrationAiCameraApply 套用
+  const handleAiNarration = useCallback((narrationText: string, cues: SubtitleCue[]) => {
+    setNarrationInputText(narrationText)
+    setSubtitleCues(cues)
+    setActiveSubtitleId(cues[0]?.id ?? null)
+    setIsNarrationCollapsed(false)
+  }, [])
 
   // 把旁白字幕卡片的 SubtitleStyle 對應轉成鏡頭字幕（CaptionData）欄位，套用到目前選取的鏡頭
   const handleApplySubtitleStyleToCameraCaption = useCallback((style: SubtitleStyle) => {
@@ -693,7 +687,8 @@ function AppInner() {
     overlays: [],
     showCameraCaptions: true,
     audioEnd: 0,
-  }), [scene, carousel.slides, carousel.background])
+    credit: carousel.credit,
+  }), [scene, carousel.slides, carousel.background, carousel.credit])
 
   // 封面／封底沒有取景，選到它們時畫布一律顯示成品預覽（字幕投影），文字可直接拖曳
   const isCardActive = !!carousel.slides[carousel.activeIndex]?.card
@@ -799,6 +794,10 @@ function AppInner() {
             collapsed={isNarrationCollapsed}
             onToggleCollapse={() => setIsNarrationCollapsed(v => !v)}
           />}
+          {/* 輪播模式左欄空著：AI 解析筆記放這裡，右側欄照樣可以改字幕 */}
+          {isCarousel && carousel.notesOpen && carousel.notes && (
+            <CarouselNotesPanel notes={carousel.notes} onClose={() => carousel.setNotesOpen(false)} />
+          )}
           <CanvasSection
             isDisabled={isDisabled}
             hasImage={!!store.image}
@@ -836,6 +835,7 @@ function AppInner() {
             <CarouselPanel
               carousel={carousel}
               scene={carouselScene}
+              image={store.image}
               videoPoints={store.points}
               activeCaptionIndex={activeCaptionIndex}
               onSetActiveCaptionIndex={setActiveCaptionIndex}
@@ -950,7 +950,8 @@ function AppInner() {
       {isAiPanelOpen && (
         <AiGeneratePanel
           image={store.image}
-          onGenerated={handleAiGenerated}
+          onNarration={handleAiNarration}
+          onCamera={handleNarrationAiCameraApply}
           onClose={() => setIsAiPanelOpen(false)}
         />
       )}

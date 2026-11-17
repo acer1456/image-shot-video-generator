@@ -1,5 +1,5 @@
 import type { MutableRefObject } from 'react'
-import type { NarrationAudioSegment, NarrationTrack, SubtitleCue } from '@/types'
+import type { NarrationAudioSegment, NarrationTrack, NarrationWordTimestamp, SubtitleCue } from '@/types'
 import { buildSubtitleCues, parseNarrationSpeechSegments } from '@/hooks/useheadTTS'
 import { alignWordsCtc } from '@/lib/ctcAlign'
 import type { CtcEmissions } from '@/lib/asr'
@@ -34,6 +34,34 @@ export function parseNarrationInput(raw: string): { ttsText: string; lines: Narr
   if (pendingEnglish !== null) lines.push({ english: pendingEnglish, translation: '' })
 
   return { ttsText: ttsLines.join('\n'), lines }
+}
+
+// AI 旁白先排上時間軸的草稿字幕：narrationId 用這個標記，產生語音或上傳音訊時整批換成真實時間
+export const DRAFT_NARRATION_ID = 'ai-draft'
+
+export const isDraftCue = (cue: SubtitleCue) => cue.narrationId === DRAFT_NARRATION_ID
+
+// ponytail: 每字 0.4 秒、行尾停 0.35 秒的粗估，只求先看得到；真實時間由語音對齊取代
+// 斷句沿用 buildSubtitleCues，草稿和之後的真字幕切法一致
+export function buildDraftSubtitleCues(raw: string): SubtitleCue[] {
+  const words: NarrationWordTimestamp[] = []
+  const ranges: Array<{ translation: string; startWord: number; endWord: number }> = []
+  let t = 0
+  for (const line of parseNarrationInput(raw).lines) {
+    const startWord = words.length
+    for (const word of line.english.split(/\s+/).filter(Boolean)) {
+      words.push({ word, startTime: t, duration: 0.4 })
+      t += 0.4
+    }
+    t += 0.35
+    if (line.translation && words.length > startWord) {
+      ranges.push({ translation: line.translation, startWord, endWord: words.length - 1 })
+    }
+  }
+  return buildSubtitleCues(DRAFT_NARRATION_ID, words).map(cue => {
+    const match = ranges.find(r => cue.wordStartIndex >= r.startWord && cue.wordStartIndex <= r.endWord)
+    return match ? { ...cue, translation: match.translation } : cue
+  })
 }
 
 // 每個英文輸入行在 TTS 內部會被切成 1 個以上的語音片段（句尾標點、換行都會強制斷句）

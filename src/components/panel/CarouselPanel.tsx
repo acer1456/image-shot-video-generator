@@ -11,8 +11,11 @@ import AssistPanel from '@/components/panel/AssistPanel'
 import { clamp } from '@/lib/utils'
 import { drawPointThumbnail, type Scene } from '@/lib/canvas'
 import { CARD_FRAMES } from '@/lib/card'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Import, Plus, Settings, Trash2, Type, X } from 'lucide-react'
-import type { CarouselSlides } from '@/hooks/useCarouselSlides'
+import { CarouselInsightPanel } from '@/components/panel/CarouselInsightPanel'
+import { CarouselPreview } from '@/components/panel/CarouselPreview'
+import { normalizeCarouselNotes } from '@/lib/projectNormalize'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Copy, Eye, Import, NotebookText, Plus, Settings, Sparkles, Trash2, Type, X } from 'lucide-react'
+import { CAROUSEL_CAPTION, type CarouselSlides } from '@/hooks/useCarouselSlides'
 
 function SlideThumbnail({ scene, index }: { scene: Scene; index: number }) {
   const ref = useRef<HTMLCanvasElement>(null)
@@ -30,6 +33,8 @@ interface CarouselPanelProps {
   carousel: CarouselSlides
   /** 以投影片為 points 的 Scene，縮圖用 */
   scene: Scene
+  /** AI 解析要把原圖送給模型 */
+  image: HTMLImageElement | null
   videoPoints: CameraPoint[]
   activeCaptionIndex: number
   onSetActiveCaptionIndex: (i: number) => void
@@ -40,13 +45,15 @@ interface CarouselPanelProps {
 }
 
 export function CarouselPanel({
-  carousel, scene, videoPoints, activeCaptionIndex, onSetActiveCaptionIndex,
+  carousel, scene, image, videoPoints, activeCaptionIndex, onSetActiveCaptionIndex,
   lastCaptionStyle, collapsed, onToggleCollapse, onChanged,
 }: CarouselPanelProps) {
   const { slides, activeIndex, coverIndex, outroIndex } = carousel
   const active = slides[activeIndex] || null
   const hasImage = !!scene.image
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isInsightOpen, setIsInsightOpen] = useState(false)
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const slideLabel = (index: number) => {
     const card = slides[index]?.card
     if (card) return card.kind === 'cover' ? '封面' : '封底'
@@ -82,9 +89,24 @@ export function CarouselPanel({
           {activeIndex >= 0 ? slideLabel(activeIndex) : '輪播'}
           <span className="ml-2 text-[10px] font-normal text-muted-foreground">4:5</span>
         </h2>
-        <Button variant="ghost" size="icon" className="h-7 w-7" title="輪播背景設定" onClick={() => setIsSettingsOpen(true)}>
-          <Settings className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          {carousel.notes && (
+            <Button
+              variant="ghost" size="icon"
+              className={`h-7 w-7 ${carousel.notesOpen ? 'text-primary bg-primary/10' : ''}`}
+              title={carousel.notesOpen ? '收起 AI 解析筆記' : 'AI 解析筆記（敘事企劃、審核資料、參考來源）'}
+              onClick={() => carousel.setNotesOpen(!carousel.notesOpen)}
+            >
+              <NotebookText className="h-4 w-4" />
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="預覽輪播（逐張翻看）" disabled={!hasImage || !slides.length} onClick={() => setIsPreviewOpen(true)}>
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="輪播設定（IG 名稱、背景）" onClick={() => setIsSettingsOpen(true)}>
+            <Settings className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="p-4">
@@ -99,6 +121,18 @@ export function CarouselPanel({
               >
                 <ChevronLeft className="h-3.5 w-3.5" />返回輪播
               </Button>
+              {/* 停在字幕模式直接換張，逐張改字、看成品 */}
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="上一張" disabled={activeIndex <= 0} onClick={() => act(() => carousel.setActiveIndex(activeIndex - 1))}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-[11px] text-muted-foreground tabular-nums min-w-[40px] text-center">
+                  {activeIndex >= 0 ? activeIndex + 1 : '–'} / {slides.length}
+                </span>
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="下一張" disabled={activeIndex >= slides.length - 1} onClick={() => act(() => carousel.setActiveIndex(activeIndex + 1))}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <CaptionEditor
               point={active}
@@ -117,8 +151,8 @@ export function CarouselPanel({
               onUpdateCaption={(field, value) => act(() => carousel.updateCaption(activeIndex, activeCaptionIndex, field, value))}
               onUpdateHold={() => undefined}
               onCenter={() => act(() => {
-                carousel.updateCaption(activeIndex, activeCaptionIndex, 'x', 0.5)
-                carousel.updateCaption(activeIndex, activeCaptionIndex, 'y', 0.85)
+                carousel.updateCaption(activeIndex, activeCaptionIndex, 'x', CAROUSEL_CAPTION.x)
+                carousel.updateCaption(activeIndex, activeCaptionIndex, 'y', CAROUSEL_CAPTION.y)
               })}
             />
           </>
@@ -145,6 +179,14 @@ export function CarouselPanel({
                 <Import className="h-3.5 w-3.5" />從鏡頭匯入
               </Button>
             </div>
+            <Button
+              variant="secondary" size="sm"
+              disabled={!image}
+              title="AI 把畫作寫成一組電影式敘事輪播（最多 30 張），每張框選一個畫面並配中英文案"
+              onClick={() => setIsInsightOpen(true)}
+            >
+              <Sparkles className="h-3.5 w-3.5" />AI 解析隱藏意涵
+            </Button>
 
             {slides.length === 0 && (
               <div className="text-muted-foreground text-xs py-4 text-center">
@@ -283,15 +325,44 @@ export function CarouselPanel({
       </div>
     </aside>
 
+    {isPreviewOpen && hasImage && slides.length > 0 && (
+      <CarouselPreview scene={scene} startIndex={activeIndex} slideLabel={slideLabel} onClose={() => setIsPreviewOpen(false)} />
+    )}
+
+    {isInsightOpen && image && (
+      <CarouselInsightPanel
+        image={image}
+        onApply={result => act(() => {
+          carousel.importInsights(result.insights, image, lastCaptionStyle)
+          carousel.setNotes(normalizeCarouselNotes(result))
+          carousel.setNotesOpen(true)
+        })}
+        onClose={() => setIsInsightOpen(false)}
+      />
+    )}
+
     {isSettingsOpen && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsSettingsOpen(false)}>
         <div className="bg-card rounded-xl border border-border p-5 w-80 shadow-xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold">輪播背景設定</h3>
+            <h3 className="text-sm font-semibold">輪播設定</h3>
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsSettingsOpen(false)}>
               <X className="h-3.5 w-3.5" />
             </Button>
           </div>
+          <div className="mb-4">
+            <Label className="mb-1 block text-xs">IG 名稱（每張底部的來源）</Label>
+            <Input
+              value={carousel.credit}
+              onChange={e => act(() => carousel.setCredit(e.target.value))}
+              placeholder="@your_ig"
+              maxLength={40}
+              className="h-8 text-sm"
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">留空就不顯示。套用到每一張（含封面、封底），存在這台電腦，所有專案共用。</p>
+          </div>
+          <Separator className="mb-4" />
+          <p className="text-[11px] font-medium mb-1">背景</p>
           <p className="text-[11px] text-muted-foreground mb-3">與影片的背景設定各自獨立。</p>
           <AssistPanel
             backgroundSettings={carousel.background}

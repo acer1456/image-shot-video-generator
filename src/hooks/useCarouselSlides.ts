@@ -1,13 +1,19 @@
-import { useCallback, useState } from 'react'
-import type { BackgroundSettings, CameraPoint, CaptionData, CarouselCard } from '@/types'
+import { useCallback, useEffect, useState } from 'react'
+import type { BackgroundSettings, CameraPoint, CaptionData, CarouselCard, CarouselInsight, CarouselNotes } from '@/types'
 import { normalizePoint } from '@/hooks/useAppStore'
 import { cardPointTemplate } from '@/lib/card'
 import { clamp } from '@/lib/utils'
+import { boxToPoint } from '@/lib/canvas'
+
+const LS_CAROUSEL_CREDIT = 'carousel_credit'
 
 /** IG 輪播固定 4:5 */
 export const CAROUSEL_OUTPUT = { width: 1080, height: 1350 }
-/** 4:5 畫面較矮，字幕預設放低一點（影片是 0.82） */
-const CAROUSEL_CAPTION_Y = 0.85
+/**
+ * 輪播字幕版面：置中在畫面正中央，字比影片小一號（英文 45px、中文 27px）；
+ * 文字框加寬一點，讓一行英文（AI 提示詞限 34 字元）不必換行。字型、顏色仍沿用上次的字幕樣式。
+ */
+export const CAROUSEL_CAPTION = { x: 0.5, y: 0.5, scale: 0.8, subtitleScale: 1, boxScaleX: 1.1 } satisfies Partial<CaptionData>
 /** IG 輪播預設原圖填滿模糊，與影片的純黑底獨立 */
 export const DEFAULT_CAROUSEL_BACKGROUND: BackgroundSettings = { mode: 'blur', color: '#000000', blur: 18 }
 
@@ -22,6 +28,12 @@ export function useCarouselSlides() {
   const [activeIndex, setActiveIndex] = useState(-1)
   const [tab, setTab] = useState<'camera' | 'caption'>('camera')
   const [background, setBackground] = useState<BackgroundSettings>(DEFAULT_CAROUSEL_BACKGROUND)
+  // AI 解析的敘事企劃／審核資料：隨專案存檔，面板開關不存
+  const [notes, setNotes] = useState<CarouselNotes | null>(null)
+  const [notesOpen, setNotesOpen] = useState(false)
+  // 每張底部的 IG 署名是帳號層級的設定：存在這台電腦、所有專案共用，不進專案檔
+  const [credit, setCredit] = useState(() => localStorage.getItem(LS_CAROUSEL_CREDIT) ?? '')
+  useEffect(() => { localStorage.setItem(LS_CAROUSEL_CREDIT, credit) }, [credit])
 
   // 封面固定第一張、封底固定最後一張；其餘操作都不能越過它們
   const coverIndex = slides[0]?.card?.kind === 'cover' ? 0 : -1
@@ -31,7 +43,7 @@ export function useCarouselSlides() {
 
   const makeSlide = useCallback((x: number, y: number, zoom: number, style: Partial<CaptionData> | null) => {
     // normalizePoint 的 caption 型別是交集寫法，部分欄位要用 cast 餵進去（App.tsx 也是這樣做）
-    return normalizePoint({ x, y, zoom, caption: { ...(style || {}), y: CAROUSEL_CAPTION_Y, x: 0.5 } as CaptionData })
+    return normalizePoint({ x, y, zoom, caption: { ...(style || {}), ...CAROUSEL_CAPTION } as CaptionData })
   }, [])
 
   const patchSlide = useCallback((index: number, patch: Partial<CameraPoint>) => {
@@ -89,21 +101,38 @@ export function useCarouselSlides() {
     setActiveIndex(to)
   }, [slides, firstSlide, endSlide])
 
-  /** 從影片鏡頭匯入：每個鏡頭變一張投影片，字幕位置改用輪播預設 */
+  /** 從影片鏡頭匯入：每個鏡頭變一張投影片，字幕位置與大小改用輪播預設 */
   const importFromPoints = useCallback((points: CameraPoint[]) => {
     const imported = points.map(p => normalizePoint({
       ...p,
-      caption: { ...p.caption, x: 0.5, y: CAROUSEL_CAPTION_Y },
+      caption: { ...p.caption, ...CAROUSEL_CAPTION },
     }))
     if (!imported.length) return
     setSlides([...slides.slice(0, endSlide), ...imported, ...slides.slice(endSlide)])
     setActiveIndex(endSlide)
   }, [slides, endSlide])
 
+  /** AI 解析：每個框換算成 4:5 取景，英文進主字幕、中文進副字幕；插在封底之前 */
+  const importInsights = useCallback((
+    insights: CarouselInsight[],
+    image: { width: number; height: number },
+    style: Partial<CaptionData> | null,
+  ) => {
+    const ratio = CAROUSEL_OUTPUT.width / CAROUSEL_OUTPUT.height
+    const added = insights.map(({ box, en, zh }) => {
+      const { x, y, zoom } = boxToPoint(image, box, ratio)
+      const slide = makeSlide(x, y, zoom, style)
+      return { ...slide, caption: { ...slide.caption, text: en, subtitle: zh } }
+    })
+    if (!added.length) return
+    setSlides([...slides.slice(0, endSlide), ...added, ...slides.slice(endSlide)])
+    setActiveIndex(endSlide)
+  }, [slides, endSlide, makeSlide])
+
   const addCaption = useCallback((index: number, style: Partial<CaptionData> | null) => {
     setSlides(prev => prev.map((s, i) => {
       if (i !== index) return s
-      const base = normalizePoint({ caption: { ...(style || {}), x: 0.5, y: 0.5 } as CaptionData }).caption
+      const base = normalizePoint({ caption: { ...(style || {}), ...CAROUSEL_CAPTION } as CaptionData }).caption
       return { ...s, extraCaptions: [...(s.extraCaptions || []), base] }
     }))
   }, [])
@@ -119,8 +148,11 @@ export function useCarouselSlides() {
     activeIndex, setActiveIndex,
     tab, setTab,
     background, setBackground,
+    notes, setNotes,
+    notesOpen, setNotesOpen,
+    credit, setCredit,
     coverIndex, outroIndex, firstSlide, endSlide,
-    add, addCard, updateCard, remove, duplicate, move, importFromPoints,
+    add, addCard, updateCard, remove, duplicate, move, importFromPoints, importInsights,
     addCaption, removeCaption,
     // 與 canvasEditorProps 同形狀的處理器
     onPointMove: (index: number, x: number, y: number) => patchSlide(index, { x: clamp(x, 0, 1), y: clamp(y, 0, 1) }),
