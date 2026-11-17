@@ -4,6 +4,7 @@ import type {
   SafeAreaVisibility, ActiveTab
 } from '@/types'
 import { DEFAULT_FONT, clamp, normalizeProjectName } from '@/lib/utils'
+import { normalizeCard } from '@/lib/card'
 
 const CAPTION_STYLE_KEYS: (keyof CaptionData)[] = [
   'x', 'y', 'scale', 'subtitleScale', 'fontFamily', 'subtitleFontFamily',
@@ -68,7 +69,9 @@ export function normalizePoint(raw: Partial<CameraPoint> & { caption?: Partial<C
     moveDuration: clamp(Number(raw?.moveDuration ?? 2), 0.1, 20),
     holdDuration: clamp(Number(raw?.holdDuration ?? 0.8), 0, 20),
     caption: makeCaption(null, migrateLegacyCaptionShadow(raw?.caption) || {}),
-    extraCaptions: (raw?.extraCaptions || []).map(c => makeCaption(null, migrateLegacyCaptionShadow(c) || {}))
+    extraCaptions: (raw?.extraCaptions || []).map(c => makeCaption(null, migrateLegacyCaptionShadow(c) || {})),
+    // 輪播卡片：影片鏡頭沒有這個欄位，不會多出 key
+    ...(raw?.card ? { card: normalizeCard(raw.card) } : {}),
   }
 }
 

@@ -25,6 +25,23 @@ export interface CaptionData {
   textShadowOpacity: number  // 0–1
 }
 
+export type CardFrame =
+  | 'none' | 'thin' | 'double' | 'polaroid'
+  | 'museum' | 'versailles' | 'baroque' | 'rococo' | 'neoclassic' | 'empire'   // 浮雕金框，見 lib/frameOrnate.ts
+
+/**
+ * 輪播的封面／封底卡片：整張畫作加框置於模糊背景上。
+ * 掛在 CameraPoint 上，所以文字（標題、畫家、logo…）全部是既有的 caption，
+ * 可拖曳、可用 CaptionEditor 編輯；x/y/zoom 對卡片無意義。
+ */
+export interface CarouselCard {
+  kind: 'cover' | 'outro'
+  frame: CardFrame
+  frameColor: string
+  imageWidth: number   // 畫作佔畫布寬度比例 0.4–0.95
+  imageY: number       // 畫作中心垂直位置 0–1
+}
+
 export interface CameraPoint {
   x: number
   y: number
@@ -34,6 +51,8 @@ export interface CameraPoint {
   holdDuration: number
   caption: CaptionData
   extraCaptions?: CaptionData[]
+  /** 只有輪播的封面／封底會有；影片鏡頭永遠沒有 */
+  card?: CarouselCard
 }
 
 // 疊加圖片：以輸出畫面（canvas）座標定位的貼圖，如 NLE 的 PiP 層
@@ -105,7 +124,12 @@ export interface ProjectData {
   subtitleCues?: SubtitleCue[]
   mosaicStrokes?: MosaicStroke[]
   showMosaicInOutput?: boolean
+  /** IG 輪播投影片：沿用 CameraPoint（x/y/zoom/caption），move 與時長欄位不使用。 */
+  carouselSlides?: CameraPoint[]
+  carouselBackground?: BackgroundSettings
 }
+
+export type EditorMode = 'video' | 'carousel'
 
 export interface DragState {
   type: 'move' | 'resize' | 'captionMove' | 'captionFontResize' | 'captionBoxWidth' | 'captionBoxHeight' | 'subtitleMove' | 'overlayMove' | 'overlayResize'

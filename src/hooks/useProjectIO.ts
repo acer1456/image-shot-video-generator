@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { normalizePoint, type AppStore } from '@/hooks/useAppStore'
-import type { CameraPoint, ActiveTab, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
+import type { BackgroundSettings, CameraPoint, ActiveTab, ImageOverlay, MosaicStroke, NarrationTrack, SubtitleCue } from '@/types'
+import { normalizeBackground } from '@/lib/projectNormalize'
 import { normalizeMosaicStrokes } from '@/lib/mosaic'
 import { OUTPUT_W, OUTPUT_H, clamp, normalizeProjectName, sanitizeFileName, getTodayString } from '@/lib/utils'
 import {
@@ -12,6 +13,7 @@ import {
   normalizeSubtitleStyle,
 } from '@/lib/projectNormalize'
 import { encodeAudioB64 } from '@/lib/audioCodec'
+import { DEFAULT_CAROUSEL_BACKGROUND } from '@/hooks/useCarouselSlides'
 
 interface UseProjectIOOptions {
   narrationInputText: string
@@ -21,6 +23,8 @@ interface UseProjectIOOptions {
   overlaysLocked?: boolean
   mosaicStrokes?: MosaicStroke[]
   showMosaicInOutput?: boolean
+  carouselSlides?: CameraPoint[]
+  carouselBackground?: BackgroundSettings
   setNarrationInputText: Dispatch<SetStateAction<string>>
   setNarrationTrack: Dispatch<SetStateAction<NarrationTrack | null>>
   setSubtitleCues: Dispatch<SetStateAction<SubtitleCue[]>>
@@ -28,6 +32,8 @@ interface UseProjectIOOptions {
   setOverlaysLocked?: Dispatch<SetStateAction<boolean>>
   setMosaicStrokes?: Dispatch<SetStateAction<MosaicStroke[]>>
   setShowMosaicInOutput?: Dispatch<SetStateAction<boolean>>
+  setCarouselSlides?: Dispatch<SetStateAction<CameraPoint[]>>
+  setCarouselBackground?: Dispatch<SetStateAction<BackgroundSettings>>
 }
 
 export function useProjectIO(store: AppStore, triggerRedraw: () => void, options?: UseProjectIOOptions) {
@@ -108,6 +114,8 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
         overlaysLocked: options?.overlaysLocked ?? false,
         mosaicStrokes: options?.mosaicStrokes ?? [],
         showMosaicInOutput: options?.showMosaicInOutput ?? true,
+        carouselSlides: options?.carouselSlides ?? [],
+        carouselBackground: options?.carouselBackground,
       }
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -145,6 +153,8 @@ export function useProjectIO(store: AppStore, triggerRedraw: () => void, options
       options?.setOverlaysLocked?.(project.overlaysLocked === true)
       options?.setMosaicStrokes?.(normalizeMosaicStrokes(project.mosaicStrokes))
       options?.setShowMosaicInOutput?.(project.showMosaicInOutput !== false)
+      options?.setCarouselSlides?.(Array.isArray(project.carouselSlides) ? project.carouselSlides.map(normalizePoint) : [])
+      options?.setCarouselBackground?.(normalizeBackground(project.carouselBackground, DEFAULT_CAROUSEL_BACKGROUND))
       if (project.image?.dataUrl) store.loadImageDataUrl(project.image.dataUrl)
       else triggerRedraw()
     } catch (err) { console.error(err); alert('載入失敗：請確認檔案正確') }

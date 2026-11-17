@@ -1,6 +1,7 @@
-import type { ImageOverlay, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
+import type { BackgroundSettings, ImageOverlay, NarrationAudioSegment, NarrationSegment, NarrationTrack, SubtitleCue, SubtitleStyle } from '@/types'
 import { DEFAULT_SUBTITLE_STYLE } from '@/types'
 import { decodeAudioB64 } from '@/lib/audioCodec'
+import { clamp } from '@/lib/utils'
 
 // 專案檔 / 自動暫存共用的還原正規化邏輯（useProjectIO 與 useAutosave 各自維護過一份，已合併於此）
 
@@ -173,4 +174,14 @@ export function normalizeSubtitleCues(value: unknown, legacySegments: NarrationS
     wordStartIndex: 0,
     wordEndIndex: 0,
   }))
+}
+
+/** 背景設定：缺欄位就用給定預設（影片與輪播各自有不同預設） */
+export function normalizeBackground(raw: unknown, fallback: BackgroundSettings): BackgroundSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<BackgroundSettings>
+  return {
+    mode: r.mode === 'blur' ? 'blur' : r.mode === 'color' ? 'color' : fallback.mode,
+    color: typeof r.color === 'string' ? r.color : fallback.color,
+    blur: clamp(Number(r.blur ?? fallback.blur), 0, 50),
+  }
 }

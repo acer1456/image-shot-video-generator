@@ -5,12 +5,16 @@ import { Button } from '@/components/ui/button'
 import { composeFrame, timeOfPoint, type Scene } from '@/lib/canvas'
 import { OUTPUT_H, OUTPUT_W, getTodayString, sanitizeFileName } from '@/lib/utils'
 
-type ScreenDownloadSize = 'portrait-4-5' | 'square-1-1' | 'original'
+export type ScreenDownloadSize = 'portrait-4-5' | 'square-1-1' | 'original'
 
 interface ScreenDownloadProps {
   scene: Scene
   projectName: string
   disabled?: boolean
+  /** 可選的輸出尺寸；預設全部。輪播模式只給 4:5 與 1:1。 */
+  sizes?: ScreenDownloadSize[]
+  /** 按鈕文字，預設「下載畫面」 */
+  label?: string
 }
 
 const SCREEN_DOWNLOAD_SIZES: Record<ScreenDownloadSize, { label: string; width: number; height: number }> = {
@@ -140,6 +144,8 @@ export default function ScreenDownload({
   scene,
   projectName,
   disabled = false,
+  sizes = ['portrait-4-5', 'square-1-1', 'original'],
+  label = '下載畫面',
 }: ScreenDownloadProps) {
   const [isDownloading, setIsDownloading] = useState(false)
 
@@ -191,7 +197,7 @@ export default function ScreenDownload({
       <DropdownMenuPrimitive.Trigger asChild>
         <Button size="sm" variant="ghost" className="h-8 gap-1.5 rounded-lg text-muted-foreground hover:text-foreground" title="下載目前畫面截圖" disabled={disabled || !scene.image || !scene.points.length || isDownloading}>
           {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-          <span className="hidden lg:inline text-xs">下載畫面</span>
+          <span className="hidden lg:inline text-xs">{label}</span>
           <ChevronDown className="h-3 w-3 opacity-70" />
         </Button>
       </DropdownMenuPrimitive.Trigger>
@@ -201,13 +207,13 @@ export default function ScreenDownload({
           sideOffset={4}
           className="z-50 min-w-[210px] rounded-md border border-border bg-popover p-1 shadow-md animate-in fade-in-0 zoom-in-95"
         >
-          {(Object.entries(SCREEN_DOWNLOAD_SIZES) as [ScreenDownloadSize, typeof SCREEN_DOWNLOAD_SIZES[ScreenDownloadSize]][]).map(([key, size]) => (
+          {sizes.map(key => (
             <DropdownMenuPrimitive.Item
               key={key}
               className="cursor-pointer rounded px-3 py-1.5 text-sm outline-none select-none hover:bg-accent focus:bg-accent"
               onSelect={() => void downloadScreens(key)}
             >
-              {size.label}
+              {SCREEN_DOWNLOAD_SIZES[key].label}
             </DropdownMenuPrimitive.Item>
           ))}
         </DropdownMenuPrimitive.Content>

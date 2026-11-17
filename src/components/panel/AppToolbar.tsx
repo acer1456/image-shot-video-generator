@@ -14,7 +14,7 @@ import { normalizeProjectName } from '@/lib/utils'
 import type { ChineseConversion } from '@/lib/chinese'
 import type { VideoRenderMethod } from '@/hooks/useVideoRender'
 import ScreenDownload from '@/components/ScreenDownload'
-import type { ActiveTab } from '@/types'
+import type { ActiveTab, EditorMode } from '@/types'
 import type { Scene } from '@/lib/canvas'
 
 
@@ -29,6 +29,8 @@ interface AppToolbarProps {
   projectName: string
   activeTab: ActiveTab
   onTabChange: (tab: 'camera' | 'caption') => void
+  editorMode: EditorMode
+  onEditorModeChange: (mode: EditorMode) => void
   fileInputRef: React.RefObject<HTMLInputElement>
   loadProjectInputRef: React.RefObject<HTMLInputElement>
   onProjectNameChange: (name: string) => void
@@ -51,6 +53,7 @@ export function AppToolbar({
   isDisabled, loadingPainting, isRendering, renderProgress,
   hasImage, hasPoints, scene, projectName,
   activeTab, onTabChange,
+  editorMode, onEditorModeChange,
   fileInputRef, loadProjectInputRef,
   onProjectNameChange, onImageFile, onOverlayImageFile, onLoadFile,
   onOpenMasterworkPicker, onOpenAiPanel, onRenderVideo,
@@ -142,6 +145,25 @@ export function AppToolbar({
         />
       )}
 
+      {/* 影片 / 輪播 模式切換 */}
+      <div className="flex items-center rounded-full bg-secondary/70 p-0.5 ml-1 flex-shrink-0">
+        {(['video', 'carousel'] as const).map(mode => (
+          <button
+            key={mode}
+            disabled={isDisabled}
+            onClick={() => onEditorModeChange(mode)}
+            className={`h-7 px-3 rounded-full text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+              editorMode === mode
+                ? 'bg-foreground text-background shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+            title={mode === 'video' ? '9:16 影片' : 'IG 4:5 輪播圖'}
+          >
+            {mode === 'video' ? '影片' : '輪播'}
+          </button>
+        ))}
+      </div>
+
       {/* 鏡頭 / 字幕 切換（置於工具列，不佔用畫布空間） */}
       <div className="flex items-center rounded-full bg-secondary/70 p-0.5 ml-1 flex-shrink-0">
         {(['camera', 'caption'] as const).map(tab => (
@@ -181,8 +203,10 @@ export function AppToolbar({
 
         <ScreenDownload
           scene={scene}
-          projectName={projectName}
+          projectName={editorMode === 'carousel' ? `${projectName}-輪播` : projectName}
           disabled={isDisabled || isRendering}
+          sizes={editorMode === 'carousel' ? ['portrait-4-5', 'square-1-1'] : undefined}
+          label={editorMode === 'carousel' ? '下載輪播' : undefined}
         />
 
         {/* 更多動作（儲存 / 載入 / 清除 / 全螢幕） */}
